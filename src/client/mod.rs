@@ -22,7 +22,7 @@ use std::io::IsTerminal as _;
 use std::io::{self, BufRead, Write as _};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use crossterm::event::{
@@ -44,12 +44,44 @@ use crate::protocol::render_ansi;
 use crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD;
 use crate::protocol::{
     self, AttachScrollDirection, AttachScrollSource, ClientKeybindings, ClientLaunchMode,
-    ClientMessage, NotifyKind, RenderEncoding, ServerMessage, MAX_FRAME_SIZE,
+    ClientMessage, FrameData, NotifyKind, RenderEncoding, ServerMessage, MAX_FRAME_SIZE,
     MAX_GRAPHICS_FRAME_SIZE, PROTOCOL_VERSION,
 };
 use crate::server::socket_paths::client_socket_path;
 
 static RECEIVED_KITTY_GRAPHICS_IDS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
+
+const CLIENT_REFRESH_RATE_ENV_VAR: &str = "HERDR_CLIENT_REFRESH_RATE_HZ";
+
+fn client_refresh_interval_from_env() -> Option<Duration> {
+    let value = match std::env::var(CLIENT_REFRESH_RATE_ENV_VAR) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            warn!(
+                "ignoring invalid HERDR_CLIENT_REFRESH_RATE_HZ; expected an integer from 1 through 60"
+            );
+            return None;
+        }
+    };
+
+    let hertz = value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit())
+        .then(|| value.parse::<u64>().ok())
+        .flatten()
+        .filter(|hertz| (1..=60).contains(hertz));
+
+    match hertz {
+        Some(hertz) => Some(Duration::from_nanos(1_000_000_000 / hertz)),
+        None => {
+            warn!(
+                "ignoring invalid HERDR_CLIENT_REFRESH_RATE_HZ; expected an integer from 1 through 60"
+            );
+            None
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Client state
@@ -62,6 +94,9 @@ struct ClientLoopConfig {
     host_cursor: crate::config::HostCursorModeConfig,
     kitty_graphics_enabled: bool,
     mouse_capture_active: bool,
+    /// Optional per-client cap for semantic frame presentation.
+    presentation_interval: Option<Duration>,
+    #[cfg(unix)]
     remote_image_paste_key: Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
 }
 
@@ -98,6 +133,77 @@ struct ClientState {
     repaint_pending: bool,
     /// Whether this client draws the cursor into frame cells instead of using the host cursor.
     draw_host_cursor: bool,
+}
+
+/// Coalesces semantic frames before they enter the bounded event queue.
+struct LatestSemanticFrame {
+    frame: parking_lot::Mutex<Option<FrameData>>,
+    notification_pending: AtomicBool,
+}
+
+impl LatestSemanticFrame {
+    fn new() -> Self {
+        Self {
+            frame: parking_lot::Mutex::new(None),
+            notification_pending: AtomicBool::new(false),
+        }
+    }
+
+    /// Replaces the pending frame and reports whether the caller must notify the event loop.
+    fn replace(&self, frame: FrameData) -> bool {
+        *self.frame.lock() = Some(frame);
+        !self.notification_pending.swap(true, Ordering::AcqRel)
+    }
+
+    /// Takes the latest frame after reopening notification for the next producer.
+    ///
+    /// Clearing before taking ensures a concurrently received frame either becomes this
+    /// result or schedules another event-loop wakeup.
+    fn take(&self) -> Option<FrameData> {
+        self.notification_pending.store(false, Ordering::Release);
+        self.frame.lock().take()
+    }
+}
+
+/// Limits semantic-frame presentation without delaying protocol processing.
+struct SemanticFramePacer {
+    interval: Duration,
+    next_present_at: Option<Instant>,
+    pending_frame: Option<FrameData>,
+}
+
+impl SemanticFramePacer {
+    fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            next_present_at: None,
+            pending_frame: None,
+        }
+    }
+
+    fn submit(&mut self, frame: FrameData, now: Instant) -> Option<FrameData> {
+        if self.next_present_at.is_none_or(|deadline| now >= deadline) {
+            self.next_present_at = Some(now + self.interval);
+            Some(frame)
+        } else {
+            self.pending_frame = Some(frame);
+            None
+        }
+    }
+
+    fn presentation_deadline(&self) -> Option<Instant> {
+        self.pending_frame.as_ref().and(self.next_present_at)
+    }
+
+    fn present_due(&mut self, now: Instant) -> Option<FrameData> {
+        let deadline = self.presentation_deadline()?;
+        if now < deadline {
+            return None;
+        }
+
+        self.next_present_at = Some(now + self.interval);
+        self.pending_frame.take()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -232,6 +338,30 @@ impl ClientState {
     fn request_repaint(&mut self) {
         self.repaint_pending = true;
     }
+}
+
+fn render_semantic_frame(state: &mut ClientState, frame_data: FrameData) {
+    let frame_data = if state.draw_host_cursor {
+        render_ansi::frame_with_drawn_cursor(frame_data)
+    } else {
+        frame_data
+    };
+    let encoded = if state.draw_host_cursor {
+        state
+            .blit_encoder
+            .encode_with_suppressed_visible_cursor(&frame_data, false)
+    } else {
+        state.blit_encoder.encode(&frame_data, false)
+    };
+    let mut stdout = io::stdout();
+    let graphics = if state.kitty_graphics_enabled {
+        frame_data.graphics.as_slice()
+    } else {
+        &[]
+    };
+    let _ = write_encoded_frame_with_graphics(&mut stdout, &encoded.bytes, graphics);
+    let _ = stdout.flush();
+    state.blit_encoder.commit(frame_data, encoded);
 }
 
 // ---------------------------------------------------------------------------
@@ -906,10 +1036,14 @@ enum ClientLoopEvent {
     Resize(u16, u16, u32, u32),
     /// Server message received.
     ServerMessage(ServerMessage),
+    /// A coalesced semantic frame is ready for presentation.
+    SemanticFrameReady,
     /// Server reader thread exited (connection lost).
     ServerDisconnected,
     /// Timer tick.
     Timer,
+    /// A semantic-frame presentation deadline elapsed.
+    PresentationDue,
 }
 
 /// Runs the thin client: connects to the server, performs the handshake,
@@ -1211,6 +1345,7 @@ fn run_client_with_mode(
     log_message: &'static str,
 ) -> io::Result<()> {
     init_logging();
+    let presentation_interval = client_refresh_interval_from_env();
 
     let loaded_config = crate::config::Config::load();
     crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
@@ -1222,13 +1357,15 @@ fn run_client_with_mode(
     let remote_image_paste_key = client_remote_image_paste_key(&loaded_config.config);
     let kitty_graphics_enabled =
         loaded_config.config.experimental.kitty_graphics && !direct_attach_requested;
-    let loop_config = ClientLoopConfig {
+    let mut loop_config = ClientLoopConfig {
         sound_config: loaded_config.config.ui.sound,
         mouse_scroll_lines,
         redraw_on_focus_gained,
         host_cursor,
         kitty_graphics_enabled,
         mouse_capture_active: mouse_capture,
+        presentation_interval,
+        #[cfg(unix)]
         remote_image_paste_key,
     };
 
@@ -1268,6 +1405,10 @@ fn run_client_with_mode(
             std::process::exit(1);
         }
     };
+
+    if negotiated_encoding != RenderEncoding::SemanticFrame || attach_escape.is_some() {
+        loop_config.presentation_interval = None;
+    }
 
     if let Some((terminal_id, takeover)) = attach_request {
         let attach = ClientMessage::AttachTerminal {
@@ -1392,6 +1533,11 @@ async fn run_client_loop(
     let draw_host_cursor = attach_escape.is_none() && should_draw_host_cursor(config.host_cursor);
     let is_remote_client = is_remote_client_process();
 
+    let mut semantic_frame_pacer = config.presentation_interval.map(SemanticFramePacer::new);
+    let latest_semantic_frame = semantic_frame_pacer
+        .as_ref()
+        .map(|_| Arc::new(LatestSemanticFrame::new()));
+
     let mut state = ClientState {
         blit_encoder: render_ansi::BlitEncoder::new(),
         mouse_capture_active: config.mouse_capture_active,
@@ -1484,6 +1630,7 @@ async fn run_client_loop(
     // Clone the stream's file descriptor so we can read from a blocking stream.
     let server_read_quit = should_quit.clone();
     let server_read_tx = event_tx.clone();
+    let server_latest_semantic_frame = latest_semantic_frame.clone();
     let read_stream = stream.try_clone().map_err(ClientError::ConnectionFailed)?;
     std::thread::spawn(move || {
         let max_frame_size = if kitty_graphics_enabled {
@@ -1496,6 +1643,7 @@ async fn run_client_loop(
             server_read_tx,
             &server_read_quit,
             max_frame_size,
+            server_latest_semantic_frame,
         );
     });
 
@@ -1514,7 +1662,18 @@ async fn run_client_loop(
     // Main event loop.
     while !should_quit.load(Ordering::Acquire) {
         let event = tokio::select! {
+            biased;
             ev = event_rx.recv() => ev.unwrap_or(ClientLoopEvent::Timer),
+            _ = async {
+                if let Some(deadline) = semantic_frame_pacer
+                    .as_ref()
+                    .and_then(SemanticFramePacer::presentation_deadline)
+                {
+                    tokio::time::sleep_until(deadline.into()).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => ClientLoopEvent::PresentationDue,
             _ = tokio::time::sleep(Duration::from_millis(100)) => ClientLoopEvent::Timer,
         };
 
@@ -1671,35 +1830,27 @@ async fn run_client_loop(
                     return Err(ClientError::ConnectionLost(e));
                 }
             }
-            ClientLoopEvent::ServerMessage(msg) => match msg {
-                ServerMessage::Frame(frame_data) => {
-                    let frame_data = if state.draw_host_cursor {
-                        render_ansi::frame_with_drawn_cursor(frame_data)
-                    } else {
-                        frame_data
-                    };
-                    let encoded = if state.draw_host_cursor {
-                        state.blit_encoder.encode_with_suppressed_visible_cursor(
-                            &frame_data,
-                            state.repaint_pending,
-                        )
-                    } else {
-                        state
-                            .blit_encoder
-                            .encode(&frame_data, state.repaint_pending)
-                    };
-                    let mut stdout = io::stdout();
-                    let graphics = if state.kitty_graphics_enabled {
-                        frame_data.graphics.as_slice()
-                    } else {
-                        &[]
-                    };
-                    let _ =
-                        write_encoded_frame_with_graphics(&mut stdout, &encoded.bytes, graphics);
-                    let _ = stdout.flush();
-                    state.blit_encoder.commit(frame_data, encoded);
-                    state.repaint_pending = false;
+            ClientLoopEvent::SemanticFrameReady => {
+                if let (Some(latest), Some(pacer)) =
+                    (&latest_semantic_frame, &mut semantic_frame_pacer)
+                {
+                    if let Some(frame) = latest.take() {
+                        if let Some(frame) = pacer.submit(frame, Instant::now()) {
+                            render_semantic_frame(&mut state, frame);
+                        }
+                    }
                 }
+            }
+            ClientLoopEvent::PresentationDue => {
+                if let Some(frame) = semantic_frame_pacer
+                    .as_mut()
+                    .and_then(|pacer| pacer.present_due(Instant::now()))
+                {
+                    render_semantic_frame(&mut state, frame);
+                }
+            }
+            ClientLoopEvent::ServerMessage(msg) => match msg {
+                ServerMessage::Frame(frame_data) => render_semantic_frame(&mut state, frame_data),
                 ServerMessage::Terminal(frame) => {
                     if state.kitty_graphics_enabled && contains_kitty_graphics_bytes(&frame.bytes) {
                         record_received_kitty_graphics(&frame.bytes);
@@ -1917,6 +2068,7 @@ fn server_reader_thread(
     event_tx: tokio::sync::mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     max_frame_size: usize,
+    latest_semantic_frame: Option<Arc<LatestSemanticFrame>>,
 ) {
     // Ensure the read stream is in blocking mode to avoid WouldBlock errors
     // from read_exact inside read_message. The stream should already be
@@ -1933,6 +2085,15 @@ fn server_reader_thread(
         }
 
         match protocol::read_message(&mut stream, max_frame_size) {
+            Ok(ServerMessage::Frame(frame)) if let Some(latest) = &latest_semantic_frame => {
+                if latest.replace(frame)
+                    && event_tx
+                        .blocking_send(ClientLoopEvent::SemanticFrameReady)
+                        .is_err()
+                {
+                    break; // Main loop gone.
+                }
+            }
             Ok(msg) => {
                 if event_tx
                     .blocking_send(ClientLoopEvent::ServerMessage(msg))
@@ -2739,6 +2900,112 @@ mod tests {
                 restore_env_var(key, value);
             }
         }
+    }
+
+    fn test_frame(id: u16) -> FrameData {
+        FrameData {
+            cells: Vec::new(),
+            width: id,
+            height: 0,
+            cursor: None,
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn client_refresh_interval_from_env_is_none_when_missing() {
+        let _guard = env_lock().lock().unwrap();
+        let _env = EnvVarsRemovedGuard::new(&[CLIENT_REFRESH_RATE_ENV_VAR]);
+
+        assert_eq!(client_refresh_interval_from_env(), None);
+    }
+
+    #[test]
+    fn client_refresh_interval_from_env_parses_valid_hertz() {
+        let _guard = env_lock().lock().unwrap();
+        let _env = EnvVarGuard::set(CLIENT_REFRESH_RATE_ENV_VAR, "15");
+
+        assert_eq!(
+            client_refresh_interval_from_env(),
+            Some(Duration::from_nanos(66_666_666))
+        );
+    }
+
+    #[test]
+    fn client_refresh_interval_from_env_rejects_invalid_hertz() {
+        let _guard = env_lock().lock().unwrap();
+
+        for value in ["0", "61", "-1", "1.5"] {
+            let _env = EnvVarGuard::set(CLIENT_REFRESH_RATE_ENV_VAR, value);
+            assert_eq!(client_refresh_interval_from_env(), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn semantic_frame_pacer_coalesces_at_fifteen_hertz() {
+        let interval = Duration::from_nanos(66_666_666);
+        let start = Instant::now();
+        let first = test_frame(1);
+        let second = test_frame(2);
+        let third = test_frame(3);
+        let fourth = test_frame(4);
+        let mut pacer = SemanticFramePacer::new(interval);
+
+        assert_eq!(pacer.submit(first.clone(), start), Some(first));
+        assert_eq!(
+            pacer.submit(second, start + Duration::from_millis(20)),
+            None
+        );
+        assert_eq!(
+            pacer.submit(third.clone(), start + Duration::from_millis(66)),
+            None
+        );
+        assert_eq!(pacer.presentation_deadline(), Some(start + interval));
+        let presented_at = start + Duration::from_millis(80);
+        assert_eq!(pacer.present_due(presented_at), Some(third));
+        assert_eq!(pacer.presentation_deadline(), None);
+
+        assert_eq!(
+            pacer.submit(fourth.clone(), start + Duration::from_millis(100)),
+            None
+        );
+        let next_deadline = presented_at + interval;
+        assert_eq!(pacer.present_due(next_deadline), Some(fourth));
+        assert_eq!(pacer.next_present_at, Some(next_deadline + interval));
+    }
+
+    #[test]
+    fn semantic_frame_pacer_coalesces_at_one_hertz() {
+        let interval = Duration::from_secs(1);
+        let start = Instant::now();
+        let first = test_frame(1);
+        let latest = test_frame(3);
+        let mut pacer = SemanticFramePacer::new(interval);
+
+        assert_eq!(pacer.submit(first.clone(), start), Some(first));
+        assert_eq!(
+            pacer.submit(test_frame(2), start + Duration::from_millis(500)),
+            None
+        );
+        assert_eq!(
+            pacer.submit(latest.clone(), start + Duration::from_millis(999)),
+            None
+        );
+        assert_eq!(pacer.present_due(start + interval), Some(latest));
+    }
+
+    #[test]
+    fn latest_semantic_frame_coalesces_notifications() {
+        let latest = LatestSemanticFrame::new();
+        let first = test_frame(1);
+        let second = test_frame(2);
+        let third = test_frame(3);
+
+        assert!(latest.replace(first));
+        assert!(!latest.replace(second.clone()));
+        assert_eq!(latest.take(), Some(second));
+        assert!(latest.replace(third));
     }
 
     #[test]
