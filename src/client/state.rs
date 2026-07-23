@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Instant;
 
 #[cfg(unix)]
 const MAX_RETIRED_DIRECT_GRAPHICS: usize = 64;
@@ -70,6 +71,8 @@ pub(super) struct ClientState {
         Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
     pub(super) redraw_on_focus_gained: bool,
     pub(super) repaint_pending: bool,
+    /// Coalesces composed shell frames while the optional presentation cap is active.
+    pub(super) presentation_pacer: Option<SemanticFramePacer>,
     /// During a source-off-first handoff the currently blitted frame remains authoritative until
     /// an acknowledged target snapshot/surface pair commits.
     pub(super) presentation_frozen: bool,
@@ -129,6 +132,7 @@ impl ClientState {
             remote_image_paste_key: None,
             redraw_on_focus_gained: false,
             repaint_pending: false,
+            presentation_pacer: None,
             presentation_frozen: false,
             deferred_local_activation: None,
             draw_host_cursor: false,
@@ -145,6 +149,7 @@ impl ClientState {
 
     pub(super) fn freeze_presentation(&mut self) {
         self.presentation_frozen = true;
+        self.clear_pending_presentation();
     }
 
     pub(super) fn record_host_theme_update(
@@ -194,9 +199,36 @@ impl ClientState {
 
     pub(super) fn unfreeze_presentation(&mut self) {
         self.presentation_frozen = false;
+        self.clear_pending_presentation();
         // A resize or metadata event may have happened while frozen. Force a full frame rather
         // than attempting to patch the old source frame.
         self.request_repaint();
+    }
+
+    pub(super) fn presentation_deadline(&self) -> Option<Instant> {
+        self.presentation_pacer
+            .as_ref()
+            .and_then(SemanticFramePacer::presentation_deadline)
+    }
+
+    pub(super) fn present_due(&mut self, now: Instant) {
+        if self.presentation_frozen {
+            self.clear_pending_presentation();
+            return;
+        }
+        let frame = self
+            .presentation_pacer
+            .as_mut()
+            .and_then(|pacer| pacer.present_due(now));
+        if let Some(frame) = frame {
+            self.present_frame_now(frame);
+        }
+    }
+
+    fn clear_pending_presentation(&mut self) {
+        if let Some(pacer) = self.presentation_pacer.as_mut() {
+            pacer.clear();
+        }
     }
 
     /// Present a composed error/chrome frame while retaining the handoff input freeze. The pane
@@ -208,7 +240,11 @@ impl ClientState {
         let frozen = self.presentation_frozen;
         // Chrome can repaint the frozen source, but cannot retire its staged images.
         let deferred_cleanup = frozen.then(|| std::mem::take(&mut self.pending_native_cleanup));
-        self.presentation_frozen = false;
+        if frozen {
+            self.presentation_frozen = false;
+            // A frozen chrome frame supersedes any source frame retained before the handoff.
+            self.clear_pending_presentation();
+        }
         self.present_frame(frame_data);
         self.presentation_frozen = frozen;
         if let Some(cleanup) = deferred_cleanup {
@@ -321,6 +357,7 @@ impl ClientState {
     ) -> io::Result<bool> {
         if self.presentation_frozen
             || self.repaint_pending
+            || self.presentation_pacer.is_some()
             || (self.kitty_graphics_enabled && !self.pending_native_cleanup.is_empty())
         {
             crate::render_prof::event("client_surface_patch.fallback.repaint");
@@ -502,7 +539,47 @@ impl ClientState {
     }
 
     pub(super) fn present_frame(&mut self, frame_data: impl Into<frame_output::ComposedFrame>) {
-        let _ = self.try_present_frame(frame_data);
+        if self.presentation_frozen {
+            return;
+        }
+        let frame_data = frame_data.into();
+        let frame = match self.presentation_pacer.as_mut() {
+            Some(pacer) => pacer.submit(frame_data, Instant::now()),
+            None => Some(frame_data),
+        };
+        if let Some(frame) = frame {
+            self.present_frame_now(frame);
+        }
+    }
+
+    fn present_frame_now(&mut self, frame_data: frame_output::ComposedFrame) -> bool {
+        if self.presentation_frozen {
+            return false;
+        }
+        let frame_output::ComposedFrame {
+            frame: frame_data,
+            graphics,
+        } = frame_data;
+        let frame_data = if self.draw_host_cursor {
+            render_ansi::frame_with_drawn_cursor(frame_data)
+        } else {
+            frame_data
+        };
+        let encoded = if self.draw_host_cursor {
+            self.blit_encoder
+                .encode_with_suppressed_visible_cursor(&frame_data, self.repaint_pending)
+        } else {
+            self.blit_encoder.encode(&frame_data, self.repaint_pending)
+        };
+        let mut stdout = io::stdout();
+        if let Err(error) = self.write_composed_output(&mut stdout, &encoded.bytes, graphics) {
+            tracing::warn!(%error, "failed to present client frame");
+            self.repaint_pending = true;
+            return false;
+        }
+        self.blit_encoder.commit(frame_data, encoded);
+        self.repaint_pending = false;
+        true
     }
 
     fn write_composed_output(
@@ -546,30 +623,7 @@ impl ClientState {
         if self.presentation_frozen {
             return false;
         }
-        let frame_output::ComposedFrame {
-            frame: frame_data,
-            graphics,
-        } = frame_data.into();
-        let frame_data = if self.draw_host_cursor {
-            render_ansi::frame_with_drawn_cursor(frame_data)
-        } else {
-            frame_data
-        };
-        let encoded = if self.draw_host_cursor {
-            self.blit_encoder
-                .encode_with_suppressed_visible_cursor(&frame_data, self.repaint_pending)
-        } else {
-            self.blit_encoder.encode(&frame_data, self.repaint_pending)
-        };
-        let mut stdout = io::stdout();
-        if let Err(error) = self.write_composed_output(&mut stdout, &encoded.bytes, graphics) {
-            tracing::warn!(%error, "failed to present client frame");
-            self.repaint_pending = true;
-            return false;
-        }
-        self.blit_encoder.commit(frame_data, encoded);
-        self.repaint_pending = false;
-        true
+        self.present_frame_now(frame_data.into())
     }
 }
 
