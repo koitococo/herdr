@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Instant;
 
 /// State tracking for the thin client.
 pub(super) struct ClientState {
@@ -35,6 +36,8 @@ pub(super) struct ClientState {
         Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
     pub(super) redraw_on_focus_gained: bool,
     pub(super) repaint_pending: bool,
+    /// Coalesces composed shell frames while the optional presentation cap is active.
+    pub(super) presentation_pacer: Option<SemanticFramePacer>,
     /// During a source-off-first handoff the currently blitted frame remains authoritative until
     /// an acknowledged target snapshot/surface pair commits.
     pub(super) presentation_frozen: bool,
@@ -106,6 +109,7 @@ impl ClientState {
 
     pub(super) fn freeze_presentation(&mut self) {
         self.presentation_frozen = true;
+        self.clear_pending_presentation();
     }
 
     pub(super) fn record_host_theme_update(
@@ -155,16 +159,47 @@ impl ClientState {
 
     pub(super) fn unfreeze_presentation(&mut self) {
         self.presentation_frozen = false;
+        self.clear_pending_presentation();
         // A resize or metadata event may have happened while frozen. Force a full frame rather
         // than attempting to patch the old source frame.
         self.request_repaint();
+    }
+
+    pub(super) fn presentation_deadline(&self) -> Option<Instant> {
+        self.presentation_pacer
+            .as_ref()
+            .and_then(SemanticFramePacer::presentation_deadline)
+    }
+
+    pub(super) fn present_due(&mut self, now: Instant) {
+        if self.presentation_frozen {
+            self.clear_pending_presentation();
+            return;
+        }
+        let frame = self
+            .presentation_pacer
+            .as_mut()
+            .and_then(|pacer| pacer.present_due(now));
+        if let Some(frame) = frame {
+            self.present_frame_now(frame);
+        }
+    }
+
+    fn clear_pending_presentation(&mut self) {
+        if let Some(pacer) = self.presentation_pacer.as_mut() {
+            pacer.clear();
+        }
     }
 
     /// Present a composed error/chrome frame while retaining the handoff input freeze. The pane
     /// cells are still the last coherent surface; only client chrome (including the error) moves.
     pub(super) fn present_frozen_chrome(&mut self, frame_data: FrameData) {
         let frozen = self.presentation_frozen;
-        self.presentation_frozen = false;
+        if frozen {
+            self.presentation_frozen = false;
+            // A frozen chrome frame supersedes any source frame retained before the handoff.
+            self.clear_pending_presentation();
+        }
         self.present_frame(frame_data);
         self.presentation_frozen = frozen;
     }
@@ -182,7 +217,7 @@ impl ClientState {
         &mut self,
         patch: shell::ClientComposedSurfacePatch,
     ) -> io::Result<bool> {
-        if self.presentation_frozen || self.repaint_pending {
+        if self.presentation_frozen || self.repaint_pending || self.presentation_pacer.is_some() {
             crate::render_prof::event("client_surface_patch.fallback.repaint");
             return Ok(false);
         }
@@ -246,6 +281,19 @@ impl ClientState {
     }
 
     pub(super) fn present_frame(&mut self, frame_data: FrameData) {
+        if self.presentation_frozen {
+            return;
+        }
+        let frame = match self.presentation_pacer.as_mut() {
+            Some(pacer) => pacer.submit(frame_data, Instant::now()),
+            None => Some(frame_data),
+        };
+        if let Some(frame) = frame {
+            self.present_frame_now(frame);
+        }
+    }
+
+    fn present_frame_now(&mut self, frame_data: FrameData) {
         if self.presentation_frozen {
             return;
         }

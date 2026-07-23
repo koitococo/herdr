@@ -1,6 +1,7 @@
 use super::*;
 use std::ffi::OsString;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -148,6 +149,95 @@ impl Drop for EnvVarsRemovedGuard {
             restore_env_var(key, value);
         }
     }
+}
+
+fn test_frame(width: u16) -> FrameData {
+    FrameData {
+        cells: Vec::new(),
+        width,
+        height: 0,
+        cursor: None,
+        hyperlinks: Vec::new(),
+        graphics: Vec::new(),
+    }
+}
+
+#[test]
+fn client_refresh_interval_from_env_is_none_when_missing() {
+    let _guard = env_lock().lock().unwrap();
+    let _env = EnvVarsRemovedGuard::new(&[CLIENT_REFRESH_RATE_ENV_VAR]);
+
+    assert_eq!(client_refresh_interval_from_env(), None);
+}
+
+#[test]
+fn client_refresh_interval_from_env_accepts_only_ascii_hertz_in_range() {
+    let _guard = env_lock().lock().unwrap();
+
+    for (value, expected) in [
+        ("1", Duration::from_secs(1)),
+        ("15", Duration::from_nanos(66_666_666)),
+        ("60", Duration::from_nanos(16_666_666)),
+    ] {
+        let _env = EnvVarGuard::set(CLIENT_REFRESH_RATE_ENV_VAR, value);
+        assert_eq!(client_refresh_interval_from_env(), Some(expected), "{value}");
+    }
+}
+
+#[test]
+fn client_refresh_interval_from_env_rejects_invalid_values() {
+    let _guard = env_lock().lock().unwrap();
+
+    for value in ["", "0", "61", "-1", "1.5", "１２"] {
+        let _env = EnvVarGuard::set(CLIENT_REFRESH_RATE_ENV_VAR, value);
+        assert_eq!(client_refresh_interval_from_env(), None, "{value:?}");
+    }
+}
+
+#[test]
+fn semantic_frame_pacer_presents_latest_frame_at_deadline() {
+    let interval = Duration::from_millis(100);
+    let start = Instant::now();
+    let first = test_frame(1);
+    let latest = test_frame(3);
+    let mut pacer = SemanticFramePacer::new(interval);
+
+    assert_eq!(pacer.submit(first.clone(), start), Some(first));
+    assert_eq!(
+        pacer.submit(test_frame(2), start + Duration::from_millis(20)),
+        None
+    );
+    assert_eq!(
+        pacer.submit(latest.clone(), start + Duration::from_millis(99)),
+        None
+    );
+    assert_eq!(pacer.presentation_deadline(), Some(start + interval));
+    assert_eq!(
+        pacer.present_due(start + interval - Duration::from_nanos(1)),
+        None
+    );
+    assert_eq!(pacer.present_due(start + interval), Some(latest));
+    assert_eq!(pacer.presentation_deadline(), None);
+}
+
+#[test]
+fn semantic_frame_pacer_clear_discards_previous_endpoint_frame() {
+    let interval = Duration::from_millis(100);
+    let start = Instant::now();
+    let mut pacer = SemanticFramePacer::new(interval);
+
+    assert_eq!(pacer.submit(test_frame(1), start), Some(test_frame(1)));
+    assert_eq!(
+        pacer.submit(test_frame(2), start + Duration::from_millis(10)),
+        None
+    );
+    pacer.clear();
+    assert_eq!(pacer.presentation_deadline(), None);
+    let target = test_frame(4);
+    assert_eq!(
+        pacer.submit(target.clone(), start + Duration::from_millis(10)),
+        Some(target)
+    );
 }
 
 #[test]

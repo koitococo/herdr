@@ -45,7 +45,9 @@ use clipboard_forwarding::forward_clipboard;
 use config_reload::reload_local_client_config;
 use config_reload::{apply_reload, init_logging};
 use events::ClientLoopEvent;
-use loop_config::ClientLoopConfig;
+use loop_config::{client_refresh_interval_from_env, ClientLoopConfig, SemanticFramePacer};
+#[cfg(test)]
+use loop_config::CLIENT_REFRESH_RATE_ENV_VAR;
 use shell_runtime::*;
 use state::ClientState;
 use transport::*;
@@ -145,6 +147,7 @@ fn run_client_with_mode(
     log_message: &'static str,
 ) -> io::Result<()> {
     init_logging();
+    let presentation_interval = client_refresh_interval_from_env();
 
     let loaded_config = crate::config::Config::load();
     // Windows may not have virtual terminal processing enabled until the rendered
@@ -190,6 +193,9 @@ fn run_client_with_mode(
         mouse_capture_active: mouse_capture,
         endpoint_keybindings,
         remote_image_paste_key,
+        presentation_interval: client_rendered_shell
+            .then_some(presentation_interval)
+            .flatten(),
         shell_config,
     };
 
@@ -413,6 +419,7 @@ async fn run_client_loop(
         remote_image_paste_key: config.remote_image_paste_key,
         redraw_on_focus_gained: config.redraw_on_focus_gained,
         repaint_pending: false,
+        presentation_pacer: config.presentation_interval.map(SemanticFramePacer::new),
         presentation_frozen: false,
         deferred_local_activation: None,
         draw_host_cursor,
@@ -710,12 +717,18 @@ async fn run_client_loop(
                 shell.timer_delay(std::time::Instant::now())
             });
         let timer_deadline = client_timer.deadline(std::time::Instant::now(), timer_delay);
+        let timer_deadline = state
+            .presentation_deadline()
+            .map_or(timer_deadline, |presentation_deadline| {
+                timer_deadline.min(presentation_deadline)
+            });
         let immediate_event = scheduled_activation.take();
         #[cfg(windows)]
         let event = if let Some(event) = immediate_event {
             event
         } else {
             tokio::select! {
+                biased;
                 _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
                 ev = stdin_rx.recv(), if stdin_open => match ev {
                     Some(event) => event,
@@ -2135,6 +2148,7 @@ async fn run_client_loop(
                         return Ok(());
                     }
                 }
+                state.present_due(now);
             }
         }
     }
