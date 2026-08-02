@@ -440,6 +440,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Experimental local Kitty graphics rendering for attached clients.
 # Requires a Kitty graphics-compatible outer terminal.
 # kitty_graphics = false
+# Global render and animation cap in Hz. Valid range: 1..=60; default: 60.
+# Lower values such as 15 can save power by coalescing render and animation
+# frames without reducing terminal, API, keyboard, mouse, or selection handling.
+# refresh_rate = 60
 # Save recent pane screen history across full server restarts.
 pane_history = false
 # While prefix mode is active, temporarily switch the host input source to

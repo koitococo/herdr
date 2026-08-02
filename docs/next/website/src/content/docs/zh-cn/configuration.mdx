@@ -465,6 +465,17 @@ claude = "on"
 
 在[配置参考](/docs/config-reference/)中搜索回滚缓冲区限制、嵌套启动以及其他高级或实验性设置。启用窗格屏幕历史前，请参阅[会话状态与恢复](/docs/session-state/)；该指南说明了保存窗格内容带来的安全取舍。
 
+## 渲染刷新率
+
+限制本地 TUI 与无头服务器 UI 的重绘频率：
+
+```toml
+[experimental]
+refresh_rate = 30
+```
+
+有效范围为 1–60 Hz，默认值为 60。降低该值可在界面 dirty 时减少重绘 CPU 与终端写入量。这是进程内的渲染门控，不是客户端 semantic frame 节流环境变量 `HERDR_CLIENT_REFRESH_RATE_HZ`。无效值会在加载或重载时被拒绝，并保留先前的值。
+
 ## Kitty graphics
 
 面向已连接本地客户端的 Kitty graphics 渲染是一项实验性功能，默认禁用：

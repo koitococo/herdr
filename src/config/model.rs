@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, num::NonZeroUsize};
+use std::{collections::BTreeSet, num::NonZeroUsize, time::Duration};
 
 use crossterm::event::KeyModifiers;
 use serde::{de, Deserialize, Deserializer, Serialize};
@@ -10,6 +10,7 @@ use super::{
 };
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
+pub const DEFAULT_EXPERIMENTAL_REFRESH_RATE_HZ: u16 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -976,9 +977,45 @@ impl Default for RemoteConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefreshRate(u16);
+
+impl Default for RefreshRate {
+    fn default() -> Self {
+        Self(DEFAULT_EXPERIMENTAL_REFRESH_RATE_HZ)
+    }
+}
+
+impl<'de> Deserialize<'de> for RefreshRate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let hertz = u16::deserialize(deserializer)?;
+        if !(1..=DEFAULT_EXPERIMENTAL_REFRESH_RATE_HZ).contains(&hertz) {
+            return Err(de::Error::custom(
+                "experimental.refresh_rate must be between 1 and 60 Hz",
+            ));
+        }
+        Ok(Self(hertz))
+    }
+}
+
+impl RefreshRate {
+    pub const fn hertz(self) -> u16 {
+        self.0
+    }
+    pub fn interval(self) -> Duration {
+        Duration::from_nanos(1_000_000_000 / u64::from(self.hertz()))
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ExperimentalConfig {
+    /// Global render and animation cap in Hz. Valid range: 1..=60. Default: 60.
+    pub refresh_rate: RefreshRate,
+
     /// Allow launching herdr inside an existing herdr pane. Default: false.
     pub allow_nested: bool,
     /// Experimental local Kitty graphics rendering for attached clients. Default: false.
@@ -1911,6 +1948,35 @@ pane_history = true
         let config: Config = toml::from_str(toml).unwrap();
 
         assert!(config.experimental.pane_history);
+    }
+
+    #[test]
+    fn experimental_refresh_rate_defaults_and_parses() {
+        assert_eq!(
+            Config::default().experimental.refresh_rate.hertz(),
+            DEFAULT_EXPERIMENTAL_REFRESH_RATE_HZ
+        );
+
+        let config: Config = toml::from_str("[experimental]\nrefresh_rate = 15").unwrap();
+        assert_eq!(config.experimental.refresh_rate.hertz(), 15);
+
+        let config: Config = toml::from_str("[experimental]\nkitty_graphics = true").unwrap();
+        assert_eq!(
+            config.experimental.refresh_rate.hertz(),
+            DEFAULT_EXPERIMENTAL_REFRESH_RATE_HZ
+        );
+    }
+
+    #[test]
+    fn experimental_refresh_rate_rejects_out_of_range_values() {
+        for refresh_rate in [0, 61] {
+            let error =
+                toml::from_str::<Config>(&format!("[experimental]\nrefresh_rate = {refresh_rate}"))
+                    .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("experimental.refresh_rate must be between 1 and 60 Hz"));
+        }
     }
 
     #[test]

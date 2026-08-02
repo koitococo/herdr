@@ -469,6 +469,17 @@ claude = "on"
 
 Search the [Config reference](/docs/config-reference/) for scrollback limits, nested launches, and other advanced or experimental settings. See [Session state and restore](/docs/session-state/) before enabling pane screen history; that guide explains the security trade-off of saving pane contents.
 
+## Render refresh rate
+
+Cap how often Herdr redraws the local TUI and headless server UI:
+
+```toml
+[experimental]
+refresh_rate = 30
+```
+
+Valid range is 1–60 Hz. The default is 60. Lower values reduce redraw CPU and terminal write volume when the UI is dirty. This is a process-local render gate, not the client-side `HERDR_CLIENT_REFRESH_RATE_HZ` semantic-frame pacing env var. Invalid values are rejected on load or reload, and the previous value is kept.
+
 ## Kitty graphics
 
 Kitty graphics rendering for attached local clients is experimental and disabled by default:

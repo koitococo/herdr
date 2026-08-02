@@ -6,7 +6,7 @@ use std::time::Duration;
 use crossterm::terminal;
 
 use super::{
-    background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL, MIN_RENDER_INTERVAL,
+    background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL,
     RESIZE_POLL_INTERVAL, SELECTION_AUTOSCROLL_INTERVAL,
 };
 fn retain_detached_process_after_wait(
@@ -529,7 +529,7 @@ impl App {
 
     pub(crate) fn can_render_now(&self, now: Instant) -> bool {
         match self.last_render_at {
-            Some(last_render_at) => now.duration_since(last_render_at) >= MIN_RENDER_INTERVAL,
+            Some(last_render_at) => now.duration_since(last_render_at) >= self.render_interval,
             None => true,
         }
     }
@@ -604,7 +604,7 @@ impl App {
     ) -> Option<Instant> {
         let render_deadline = if needs_render {
             self.last_render_at
-                .map(|last_render_at| last_render_at + MIN_RENDER_INTERVAL)
+                .map(|last_render_at| last_render_at + self.render_interval)
                 .filter(|deadline| *deadline > now)
         } else {
             None
@@ -715,6 +715,28 @@ mod tests {
             is_focused: true,
         });
         (app, pane_id)
+    }
+
+    #[test]
+    fn refresh_rate_controls_render_gate_and_deadline() {
+        let config: crate::config::Config =
+            toml::from_str("[experimental]\nrefresh_rate = 15").unwrap();
+        let mut app = super::super::App::new(
+            &config,
+            true,
+            None,
+            tokio::sync::mpsc::unbounded_channel().1,
+            crate::api::EventHub::default(),
+        );
+        let now = Instant::now();
+        app.last_render_at = Some(now);
+
+        assert!(!app.can_render_now(now + Duration::from_millis(66)));
+        assert!(app.can_render_now(now + Duration::from_nanos(66_666_666)));
+        assert_eq!(
+            app.next_loop_deadline(now, true),
+            Some(now + Duration::from_nanos(66_666_666))
+        );
     }
 
     #[test]
