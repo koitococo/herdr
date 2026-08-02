@@ -7,8 +7,18 @@ const DISABLE_HOST_MOUSE_REPORTING_SEQUENCE: &[u8] =
     b"\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
 #[cfg(not(windows))]
+pub(crate) fn write_host_mouse_reporting_disable<W: Write>(writer: &mut W) -> io::Result<()> {
+    writer.write_all(DISABLE_HOST_MOUSE_REPORTING_SEQUENCE)
+}
+
+#[cfg(windows)]
+pub(crate) fn write_host_mouse_reporting_disable<W: Write>(_writer: &mut W) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
 pub(crate) fn clear_host_mouse_reporting<W: Write>(writer: &mut W) -> io::Result<()> {
-    writer.write_all(DISABLE_HOST_MOUSE_REPORTING_SEQUENCE)?;
+    write_host_mouse_reporting_disable(writer)?;
     writer.flush()
 }
 
@@ -51,6 +61,52 @@ pub(crate) fn set_host_kitty_keyboard_report_all<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
+    struct FlushTrackingWriter {
+        output: Vec<u8>,
+        flushes: usize,
+    }
+
+    #[cfg(not(windows))]
+    impl Write for FlushTrackingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.output.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushes += 1;
+            Ok(())
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn mouse_reporting_disable_write_does_not_flush() {
+        let mut writer = FlushTrackingWriter {
+            output: Vec::new(),
+            flushes: 0,
+        };
+
+        write_host_mouse_reporting_disable(&mut writer).unwrap();
+
+        assert_eq!(writer.output, DISABLE_HOST_MOUSE_REPORTING_SEQUENCE);
+        assert_eq!(writer.flushes, 0);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn clear_host_mouse_reporting_writes_then_flushes() {
+        let mut writer = FlushTrackingWriter {
+            output: Vec::new(),
+            flushes: 0,
+        };
+
+        clear_host_mouse_reporting(&mut writer).unwrap();
+
+        assert_eq!(writer.output, DISABLE_HOST_MOUSE_REPORTING_SEQUENCE);
+        assert_eq!(writer.flushes, 1);
+    }
 
     #[test]
     fn host_keyboard_report_all_replaces_the_current_herdr_stack_entry() {
