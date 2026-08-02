@@ -148,6 +148,7 @@ pub struct App {
     /// Parsed `ui.window_title` plus the hostname resolved when it was applied.
     window_title_template: Option<(crate::config::WindowTitleTemplate, String)>,
     pub(crate) persist_pane_history: bool,
+    pub(crate) render_interval: Duration,
     /// Last render-loop attempt, including a throttled hidden-only PTY skip.
     pub(crate) last_render_at: Option<Instant>,
     /// Last attempt that could update a connected presentation surface.
@@ -611,6 +612,7 @@ impl App {
             next_tab_bar_datetime_refresh: None,
             window_title_template: None,
             persist_pane_history: config.experimental.pane_history,
+            render_interval: config.experimental.refresh_rate.interval(),
             last_render_at: None,
             last_presentation_at: None,
             api_rx,
@@ -869,6 +871,7 @@ impl App {
         }
 
         if !invalid_section("experimental") {
+            self.render_interval = config.experimental.refresh_rate.interval();
             self.state.reveal_hidden_cursor_for_cjk_ime =
                 config.experimental.reveal_hidden_cursor_for_cjk_ime;
             self.state.cjk_ime_agent_filter_configured =
@@ -1775,6 +1778,34 @@ mod tests {
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
         assert_eq!(app.state.prefix_code, KeyCode::Char('a'));
         assert!(app.state.request_client_config_reload);
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn reload_config_applies_refresh_rate_and_retains_prior_value_when_invalid() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("reload-config-refresh-rate");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+        let mut app = test_app();
+
+        std::fs::write(&path, "[experimental]\nrefresh_rate = 15\n").unwrap();
+        let report = app.reload_config();
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
+        assert_eq!(app.render_interval, Duration::from_nanos(66_666_666));
+
+        std::fs::write(&path, "[experimental]\nrefresh_rate = 0\n").unwrap();
+        let report = app.reload_config();
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains(
+                "experimental.refresh_rate must be between 1 and 60 Hz"
+            )));
+        assert_eq!(app.render_interval, Duration::from_nanos(66_666_666));
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
