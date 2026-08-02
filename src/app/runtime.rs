@@ -73,7 +73,7 @@ impl App {
 
     pub(crate) fn can_render_now(&self, now: Instant) -> bool {
         match self.last_render_at {
-            Some(last_render_at) => now.duration_since(last_render_at) >= MIN_RENDER_INTERVAL,
+            Some(last_render_at) => now.duration_since(last_render_at) >= self.render_interval,
             None => true,
         }
     }
@@ -140,7 +140,7 @@ impl App {
     ) -> Option<Instant> {
         let render_deadline = if needs_render {
             self.last_render_at
-                .map(|last_render_at| last_render_at + MIN_RENDER_INTERVAL)
+                .map(|last_render_at| last_render_at + self.render_interval)
                 .filter(|deadline| *deadline > now)
         } else {
             None
@@ -250,4 +250,27 @@ mod tests {
         });
         (app, pane_id)
     }
+
+    #[test]
+    fn refresh_rate_controls_render_gate_and_deadline() {
+        let config: crate::config::Config =
+            toml::from_str("[experimental]\nrefresh_rate = 15").unwrap();
+        let mut app = super::super::App::new(
+            &config,
+            crate::app::AppPolicy::TEST,
+            None,
+            tokio::sync::mpsc::unbounded_channel().1,
+            crate::api::EventHub::default(),
+        );
+        let now = Instant::now();
+        app.last_render_at = Some(now);
+
+        assert!(!app.can_render_now(now + Duration::from_millis(66)));
+        assert!(app.can_render_now(now + Duration::from_nanos(66_666_666)));
+        assert_eq!(
+            app.next_headless_loop_deadline_with_git_refresh(now, true, false),
+            Some(now + Duration::from_nanos(66_666_666))
+        );
+    }
+
 }
