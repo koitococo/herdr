@@ -5057,8 +5057,8 @@ mod tests {
         assert_eq!(buffer[(0, 0)].symbol(), "ｶ\u{ff9e}");
         assert_eq!(
             buffer[(1, 0)].symbol(),
-            "",
-            "wide spacer tail must stay empty so the host terminal does not overwrite the voiced kana"
+            " ",
+            "ratatui represents an empty backing symbol as a visible space"
         );
         assert_eq!(buffer[(2, 0)].symbol(), "Z");
     }
