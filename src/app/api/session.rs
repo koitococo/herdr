@@ -62,7 +62,7 @@ mod tests {
     use crate::api::schema::{EmptyParams, Method, ResponseResult, SuccessResponse};
     use crate::{config::Config, workspace::Workspace};
 
-    fn app_with_two_tabs() -> crate::app::App {
+    fn app_with_legacy_multi_tab_snapshot() -> crate::app::App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = crate::app::App::new(
             &Config::default(),
@@ -80,8 +80,8 @@ mod tests {
     }
 
     #[test]
-    fn session_snapshot_bootstraps_runtime_resources() {
-        let mut app = app_with_two_tabs();
+    fn session_snapshot_preserves_legacy_multi_tab_read_only_state() {
+        let mut app = app_with_legacy_multi_tab_snapshot();
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "req_snapshot".into(),
             method: Method::SessionSnapshot(EmptyParams::default()),
