@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn tab_overflow_controls_scroll_the_client_owned_tab_bar() {
+fn desktop_spaces_shell_hides_tab_chrome() {
     let mut snapshot = snapshot();
     snapshot.tabs.extend((2..=8).map(|number| ClientShellTab {
         tab_id: format!("tab_{number}"),
@@ -16,34 +16,16 @@ fn tab_overflow_controls_scroll_the_client_owned_tab_bar() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot));
     state.set_pane_surface(surface());
-    state.compose(80, 20).expect("overflow tab bar");
+    state.compose(80, 20).expect("Spaces-only desktop shell");
 
-    assert!(state.hits.tab_scroll_right.width > 0);
-    let scroll_right = state.hits.tab_scroll_right;
-    let outcome =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: scroll_right.x + 1,
-            row: scroll_right.y,
-            modifiers: KeyModifiers::empty(),
-        })]);
-    assert!(outcome.repaint);
-    assert_eq!(state.tab_scroll, 1);
-
-    let mut update = state.snapshot.as_deref().expect("snapshot").clone();
-    update.focused_tab_id = Some("tab_8".into());
-    for tab in &mut update.tabs {
-        tab.focused = tab.tab_id == "tab_8";
-    }
-    state.set_snapshot(Box::new(update));
-    state.compose(80, 20).expect("focused overflow tab");
-    assert!(state.hits.tabs.iter().any(|(_, tab_id)| tab_id == "tab_8"));
-
-    state.compose(300, 20).expect("tabs without overflow");
-    assert_eq!(state.tab_scroll, 0);
-    assert_eq!(state.hits.tabs.len(), 8);
-    state.compose(80, 20).expect("focused tab after narrowing");
-    assert!(state.hits.tabs.iter().any(|(_, tab_id)| tab_id == "tab_8"));
+    assert_eq!(state.snapshot.as_deref().unwrap().tabs.len(), 8);
+    assert!(state.hits.tabs.is_empty());
+    assert!(state.hits.new_tab.is_empty());
+    assert!(state.hits.tab_scroll_left.is_empty());
+    assert!(state.hits.tab_scroll_right.is_empty());
+    let layout = state.layout(80, 20);
+    assert!(layout.tab_bar.is_empty());
+    assert_eq!(layout.pane_surface.height, 20);
 }
 
 #[test]
@@ -267,31 +249,8 @@ fn client_owned_sidebar_dividers_resize_live() {
     assert!(state.chrome_drag.is_none());
 
     state.set_pane_surface(surface());
-    let recovered_frame = state.compose(106, 30).expect("resized sidebar");
-    let recovered_text: String = recovered_frame
-        .cells
-        .iter()
-        .map(|cell| cell.symbol.as_str())
-        .collect();
-    assert!(recovered_text.contains(" spaces"));
-    assert!(recovered_text.contains("LIVE"));
-    assert!(!state.hits.panes.is_empty());
-    let section_divider = state.hits.sidebar_section_divider;
-    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: section_divider.x + 2,
-        row: section_divider.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    let split = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Drag(MouseButton::Left),
-        column: section_divider.x + 2,
-        row: 20,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(state.sidebar_section_split > 0.6);
-    assert!(split.repaint);
-    assert!(!split.resize);
+    state.compose(106, 30).expect("resized sidebar");
+    assert_eq!(state.hits.sidebar_section_divider, Rect::default());
 }
 
 #[test]
