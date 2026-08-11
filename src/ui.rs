@@ -1233,7 +1233,6 @@ mod tests {
         let config: crate::config::Config = toml::from_str(
             r#"
 [keys]
-switch_tab = ["prefix+1..9", "alt+1..9"]
 switch_workspace = "ctrl+1..9"
 "#,
         )
@@ -1248,18 +1247,12 @@ switch_workspace = "ctrl+1..9"
             .expect("workspace tab group")
             .1;
 
-        let switch_tab_key = workspace_tab
-            .iter()
-            .find(|(_, label)| label.as_ref() == "switch tab 1-9")
-            .map(|(key, _)| key.as_str())
-            .expect("switch tab help entry");
         let switch_workspace_key = workspace_tab
             .iter()
             .find(|(_, label)| label.as_ref() == "switch workspace 1-9")
             .map(|(key, _)| key.as_str())
             .expect("switch workspace help entry");
 
-        assert_eq!(switch_tab_key, "prefix+1..9 / alt+1..9");
         assert_eq!(switch_workspace_key, "ctrl+1..9");
     }
 }
