@@ -11,6 +11,7 @@ use crate::layout::{Node, PaneId};
 use crate::workspace::NewPane;
 
 use super::responses::{encode_error, encode_success};
+use super::tab_policy::multi_tab_unsupported;
 
 const MAX_LAYOUT_PANES: usize = 24;
 const MAX_LAYOUT_DEPTH: usize = 16;
@@ -65,6 +66,17 @@ impl App {
         } else {
             return encode_error(id, "workspace_not_found", "no active workspace");
         };
+        let Some((target_ws_idx, _)) = replace_target else {
+            return multi_tab_unsupported(id);
+        };
+        if self
+            .state
+            .workspaces
+            .get(target_ws_idx)
+            .is_none_or(|ws| ws.tabs.len() != 1)
+        {
+            return multi_tab_unsupported(id);
+        }
         if let Err(message) = validate_layout_tree(&params.root) {
             return encode_error(id, "invalid_layout", message);
         }
@@ -800,23 +812,16 @@ mod tests {
         shutdown_test_runtimes(&mut app);
     }
 
-    #[tokio::test]
-    async fn layout_apply_new_tab_follows_cached_focused_pane_cwd_without_runtime() {
+    #[test]
+    fn layout_apply_without_tab_id_is_rejected_without_events_or_session_dirty() {
         let mut app = app_with_workspace();
-        let focused_pane = app.state.workspaces[0].tabs[0].root_pane;
-        let cached_cwd = std::env::temp_dir();
-        let terminal_id = app.state.workspaces[0]
-            .terminal_id(focused_pane)
-            .cloned()
-            .unwrap();
-        app.state.terminals.get_mut(&terminal_id).unwrap().cwd = cached_cwd.clone();
 
         let response = app.handle_layout_apply(
             "req".into(),
             LayoutApplyParams {
                 workspace_id: None,
                 tab_id: None,
-                tab_label: Some("cached".into()),
+                tab_label: Some("new tab".into()),
                 focus: false,
                 root: LayoutNode::Pane {
                     pane: LayoutPane::default(),
@@ -824,16 +829,15 @@ mod tests {
             },
         );
 
-        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
-        assert!(matches!(success.result, ResponseResult::LayoutApply { .. }));
-        let created = &app.state.workspaces[0].tabs[1];
-        let created_terminal_id = created.terminal_id(created.root_pane).unwrap();
-        let created_cwd = &app.state.terminals.get(created_terminal_id).unwrap().cwd;
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "multi_tab_unsupported");
         assert_eq!(
-            crate::worktree::canonical_or_original(created_cwd),
-            crate::worktree::canonical_or_original(&cached_cwd)
+            error.error.message,
+            "multi-tab mutations are not supported; use workspaces instead"
         );
-        shutdown_test_runtimes(&mut app);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert!(!app.state.session_dirty);
+        assert!(app.event_hub.events_after(0).is_empty());
     }
 
     #[tokio::test]
@@ -871,40 +875,37 @@ mod tests {
         app.state.assert_invariants_for_test();
     }
 
-    #[tokio::test]
-    async fn layout_apply_rejects_invalid_deep_leaf_without_creating_tab() {
+    #[test]
+    fn layout_apply_rejects_legacy_multi_tab_replacement_without_switching() {
         let mut app = app_with_workspace();
-        let original_tab_count = app.state.workspaces[0].tabs.len();
+        app.state.workspaces[0].test_add_tab(Some("legacy"));
+        app.state.workspaces[0].active_tab = 0;
+        let legacy_tab_id = app.public_tab_id(0, 1).unwrap();
 
         let response = app.handle_layout_apply(
             "req".into(),
             LayoutApplyParams {
-                workspace_id: Some(app.public_workspace_id(0)),
-                tab_id: None,
-                tab_label: Some("bad".into()),
-                focus: false,
-                root: LayoutNode::Split {
-                    direction: SplitDirection::Right,
-                    ratio: 0.5,
-                    first: Box::new(LayoutNode::Pane {
-                        pane: LayoutPane {
-                            label: Some("editor".into()),
-                            ..Default::default()
-                        },
-                    }),
-                    second: Box::new(LayoutNode::Pane {
-                        pane: LayoutPane {
-                            command: Some(Vec::new()),
-                            ..Default::default()
-                        },
-                    }),
+                workspace_id: None,
+                tab_id: Some(legacy_tab_id),
+                tab_label: Some("replacement".into()),
+                focus: true,
+                root: LayoutNode::Pane {
+                    pane: LayoutPane::default(),
                 },
             },
         );
 
         let error: ErrorResponse = serde_json::from_str(&response).unwrap();
-        assert_eq!(error.error.code, "invalid_layout");
-        assert_eq!(app.state.workspaces[0].tabs.len(), original_tab_count);
+        assert_eq!(error.error.code, "multi_tab_unsupported");
+        assert_eq!(
+            error.error.message,
+            "multi-tab mutations are not supported; use workspaces instead"
+        );
+        assert_eq!(app.state.workspaces[0].tabs.len(), 2);
+        assert_eq!(app.state.active, Some(0));
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert!(!app.state.session_dirty);
+        assert!(app.event_hub.events_after(0).is_empty());
     }
 
     #[test]

@@ -21,7 +21,7 @@ pub(super) fn render_collapsed(
 ) {
     let palette = &config.palette;
     super::render::render_sidebar_background(buffer, area, palette);
-    let (workspace_area, divider_y, detail_area) = super::sidebar::collapsed_sidebar_sections(area);
+    let workspace_area = super::sidebar::collapsed_workspace_area(area);
     let mut total_rows = 0usize;
     let mut selected_row = None;
     let reveal = std::mem::take(state.reveal_navigation_workspace);
@@ -176,24 +176,7 @@ pub(super) fn render_collapsed(
             y = y.saturating_add(1);
         }
     }
-    if let Some(divider_y) = divider_y {
-        put_text(
-            buffer,
-            workspace_area.x,
-            divider_y,
-            workspace_area.width,
-            &"─".repeat(workspace_area.width as usize),
-            Style::default().fg(palette.surface_dim),
-        );
-    }
-    super::endpoint_agents::render_collapsed(
-        buffer,
-        detail_area,
-        state.endpoints,
-        state.active_endpoint_id,
-        config,
-        hits,
-    );
+    // Desktop collapsed mode intentionally has no Agent detail panel.
     hits.sidebar_toggle = if area.is_empty() || workspace_area.width == 0 {
         Rect::default()
     } else {
@@ -229,10 +212,10 @@ pub(super) fn render_expanded(
     } else {
         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
     };
-    let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
-    hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
+    let attention = active_snapshot.is_some_and(super::global_menu::global_menu_attention);
+    let new_label = format!(" new · {}", active_endpoint_label(state));
+    let geometry = super::sidebar::desktop_sidebar_geometry(area, attention, &new_label);
+    let workspace_area = geometry.content;
     put_text(
         buffer,
         workspace_area.x,
@@ -272,14 +255,7 @@ pub(super) fn render_expanded(
             );
         }
     }
-    let body = Rect::new(
-        workspace_area.x,
-        workspace_area.y.saturating_add(WORKSPACE_HEADER_ROWS),
-        workspace_area.width,
-        workspace_area
-            .height
-            .saturating_sub(WORKSPACE_HEADER_ROWS + 1),
-    );
+    let body = geometry.workspace_body;
     hits.workspace_body = body;
     let row_heights = rows
         .iter()
@@ -456,7 +432,7 @@ pub(super) fn render_expanded(
                     tokens,
                     endpoint_active,
                     selected,
-                    false,
+                    state.dragged_workspace_id == Some(workspace.workspace_id.as_str()),
                     palette,
                 );
                 if selected && palette.selection_bg == ratatui::style::Color::Reset {
@@ -496,60 +472,51 @@ pub(super) fn render_expanded(
         hits.workspace_scrollbar = track;
         super::scroll::render_list_scrollbar(buffer, track, metrics, palette);
     }
-
-    let footer_y = workspace_area.bottom().saturating_sub(1);
-    if config.mouse_capture {
-        let label = format!(" new · {}", active_endpoint_label(state));
-        hits.new_workspace = Rect::new(
-            workspace_area.x,
-            footer_y,
-            display_width(&label).min(workspace_area.width),
-            u16::from(workspace_area.height > 0),
-        );
-        put_text(
+    if let Some(row) = state.workspace_drop_indicator_row.filter(|row| {
+        *row >= body.y && *row < body.bottom()
+    }) {
+        super::render::put_text(
             buffer,
-            workspace_area.x,
-            footer_y,
-            workspace_area.width,
-            &label,
-            Style::default().fg(palette.overlay0),
-        );
-        let attention = active_snapshot.is_some_and(super::global_menu::global_menu_attention);
-        let width = if attention { 8 } else { 6 }.min(workspace_area.width);
-        hits.global_launcher = Rect::new(
-            workspace_area.right().saturating_sub(width),
-            footer_y,
-            width,
-            1,
-        );
-        put_right_text(
-            buffer,
-            workspace_area,
-            footer_y,
-            if attention { "● menu" } else { "menu" },
-            Style::default().fg(if attention {
-                palette.accent
-            } else {
-                palette.overlay0
-            }),
+            body.x,
+            row,
+            content_width,
+            &"─".repeat(content_width as usize),
+            Style::default().fg(palette.accent),
         );
     }
-    super::endpoint_agents::render_expanded(
-        buffer,
-        detail_area,
-        active_snapshot.and_then(|snapshot| snapshot.agent_view_label.as_deref()),
-        state.endpoints,
-        state.active_endpoint_id,
-        config,
-        state.agent_scroll,
-        hits,
-    );
-    hits.sidebar_toggle = Rect::new(
-        area.right().saturating_sub(2),
-        area.bottom().saturating_sub(1),
-        u16::from(area.width > 1),
-        u16::from(area.height > 0),
-    );
+
+    if config.mouse_capture && !geometry.footer.is_empty() {
+        hits.new_workspace = geometry.new_workspace;
+        if !geometry.new_workspace.is_empty() {
+            put_text(
+                buffer,
+                geometry.new_workspace.x,
+                geometry.new_workspace.y,
+                geometry.new_workspace.width,
+                &new_label,
+                Style::default().fg(palette.overlay0),
+            );
+        }
+        hits.global_launcher = geometry.global_launcher;
+        if !geometry.global_launcher.is_empty() {
+            put_text(
+                buffer,
+                geometry.global_launcher.x,
+                geometry.global_launcher.y,
+                geometry.global_launcher.width,
+                if attention { "● menu" } else { "menu" },
+                Style::default().fg(if attention {
+                    palette.accent
+                } else {
+                    palette.overlay0
+                }),
+            );
+        }
+    }
+
+    // Desktop is Spaces-only: keep endpoint/workspace navigation, but do not
+    // render the Agent detail panel.
+    hits.sidebar_toggle = geometry.toggle;
     put_text(
         buffer,
         hits.sidebar_toggle.x,

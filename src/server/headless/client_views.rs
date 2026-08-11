@@ -916,6 +916,29 @@ impl HeadlessServer {
         client_id: u64,
         msg: api::ApiRequestMessage,
     ) -> bool {
+        if let api::schema::Method::TabFocus(target) = &msg.request.method {
+            let rejects_inactive_tab = self
+                .app
+                .parse_tab_id(&target.tab_id)
+                .is_some_and(|(workspace_index, tab_index)| {
+                    !(self.app.state.active == Some(workspace_index)
+                        && self
+                            .app
+                            .state
+                            .workspaces
+                            .get(workspace_index)
+                            .is_some_and(|workspace| {
+                                workspace.active_tab_index() == tab_index
+                            }))
+                });
+            if rejects_inactive_tab {
+                // Run the normal API path so shutdown/deferral handling and the neutral
+                // multi_tab_unsupported response remain unchanged, but do it before any
+                // client-location pre-application can make the target appear active.
+                return self.handle_api_request_with_shutdown_check_inner(msg, false);
+            }
+        }
+
         let focus_before = self.shell_focus_target(client_id);
         let focused_tabs_before = self.focused_shell_tabs();
         let method_claims_geometry = Self::shell_endpoint_claims_geometry(&msg.request.method);

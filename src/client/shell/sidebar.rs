@@ -4,23 +4,88 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-pub(in crate::client::shell) fn collapsed_sidebar_sections(
+const WORKSPACE_FOOTER_ROWS: u16 = 1;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::client::shell) struct DesktopSidebarGeometry {
+    pub(in crate::client::shell) content: Rect,
+    pub(in crate::client::shell) workspace_body: Rect,
+    pub(in crate::client::shell) footer: Rect,
+    pub(in crate::client::shell) toggle: Rect,
+    pub(in crate::client::shell) new_workspace: Rect,
+    pub(in crate::client::shell) global_launcher: Rect,
+}
+
+pub(in crate::client::shell) fn desktop_sidebar_geometry(
     area: Rect,
-) -> (Rect, Option<u16>, Rect) {
+    menu_attention: bool,
+    new_label: &str,
+) -> DesktopSidebarGeometry {
     let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
-    if content.is_empty() {
-        return (Rect::default(), None, Rect::default());
+    let toggle = if area.width > 1 && area.height > 0 {
+        Rect::new(area.right().saturating_sub(2), area.bottom().saturating_sub(1), 1, 1)
+    } else {
+        Rect::default()
+    };
+    let footer = if content.width == 0
+        || content.height < WORKSPACE_HEADER_ROWS + WORKSPACE_FOOTER_ROWS + 1
+    {
+        Rect::default()
+    } else {
+        Rect::new(
+            content.x,
+            content.bottom().saturating_sub(WORKSPACE_FOOTER_ROWS + 1),
+            content.width,
+            WORKSPACE_FOOTER_ROWS,
+        )
+    };
+    let workspace_body = if footer.is_empty() {
+        Rect::default()
+    } else {
+        let body_y = content.y.saturating_add(WORKSPACE_HEADER_ROWS);
+        Rect::new(
+            content.x,
+            body_y,
+            content.width,
+            footer.y.saturating_sub(body_y),
+        )
+    };
+
+    let controls_right = toggle.x.min(content.right());
+    let available_width = controls_right.saturating_sub(content.x);
+    let desired_new_width = super::render::display_width(new_label)
+        .max(1)
+        .min(available_width);
+    let desired_menu_width = if menu_attention { 6 } else { 4 };
+    // Keep the menu control anchored before allocating the (possibly long)
+    // endpoint/workspace label. The label is the item that may be truncated.
+    let menu_width = desired_menu_width.min(available_width);
+    let menu_x = controls_right.saturating_sub(menu_width);
+    let new_width = desired_new_width.min(menu_x.saturating_sub(content.x));
+    let new_workspace = (new_width > 0 && !footer.is_empty()).then(|| {
+        Rect::new(footer.x, footer.y, new_width, footer.height)
+    }).unwrap_or_default();
+    let global_launcher = (menu_width > 0 && !footer.is_empty()).then(|| {
+        Rect::new(menu_x, footer.y, menu_width, footer.height)
+    }).unwrap_or_default();
+
+    DesktopSidebarGeometry {
+        content,
+        workspace_body,
+        footer,
+        toggle,
+        new_workspace,
+        global_launcher,
     }
-    if content.height < 7 {
-        return (content, None, Rect::default());
-    }
-    let workspace_height = content.height.div_ceil(2);
-    let divider_y = content.y + workspace_height;
-    let detail_height = content.height.saturating_sub(workspace_height + 1);
-    (
-        Rect::new(content.x, content.y, content.width, workspace_height),
-        Some(divider_y),
-        Rect::new(content.x, divider_y + 1, content.width, detail_height),
+}
+
+pub(in crate::client::shell) fn collapsed_workspace_area(area: Rect) -> Rect {
+    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+    Rect::new(
+        content.x,
+        content.y,
+        content.width,
+        content.height.saturating_sub(1),
     )
 }
 
@@ -34,7 +99,7 @@ pub(crate) fn render_collapsed_sidebar(
 ) {
     let palette = &config.palette;
     render_sidebar_background(buffer, area, palette);
-    let (workspace_area, divider_y, detail_area) = collapsed_sidebar_sections(area);
+    let workspace_area = collapsed_workspace_area(area);
     for (index, workspace) in snapshot
         .workspaces
         .iter()
@@ -94,66 +159,8 @@ pub(crate) fn render_collapsed_sidebar(
         });
     }
 
-    if let Some(divider_y) = divider_y {
-        put_text(
-            buffer,
-            workspace_area.x,
-            divider_y,
-            workspace_area.width,
-            &"─".repeat(workspace_area.width as usize),
-            Style::default().fg(palette.surface_dim),
-        );
-    }
-
-    let detail_content = Rect::new(
-        detail_area.x,
-        detail_area.y,
-        detail_area.width,
-        detail_area.height.saturating_sub(1),
-    );
-    for (index, pane_id) in super::ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
-        .into_iter()
-        .take(detail_content.height as usize)
-        .enumerate()
-    {
-        let Some(agent) = snapshot
-            .agents
-            .iter()
-            .find(|agent| agent.pane_id == pane_id)
-        else {
-            continue;
-        };
-        let rect = Rect::new(
-            detail_content.x,
-            detail_content.y + index as u16,
-            detail_content.width,
-            1,
-        );
-        if agent.focused {
-            buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
-        }
-        put_text(
-            buffer,
-            rect.x,
-            rect.y,
-            rect.width.min(2),
-            &format!("{:<2}", index + 1),
-            Style::default().fg(if agent.focused {
-                palette.text
-            } else {
-                palette.overlay0
-            }),
-        );
-        put_text(
-            buffer,
-            rect.x.saturating_add(2),
-            rect.y,
-            rect.width.saturating_sub(2),
-            status_icon(agent.agent_status, config.status_indicators),
-            Style::default().fg(status_color(agent.agent_status, palette)),
-        );
-        hits.agents.push((rect, pane_id));
-    }
+    // Desktop collapsed mode keeps only the compact Spaces list. The agent
+    // detail panel is intentionally not part of the Spaces-only shell.
     hits.sidebar_toggle = if area.is_empty() || workspace_area.width == 0 {
         Rect::default()
     } else {
@@ -195,10 +202,10 @@ pub(crate) fn render_sidebar(
     } else {
         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
     };
-    let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
-    hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
+    let attention = super::super::global_menu::global_menu_attention(snapshot);
+    let geometry = desktop_sidebar_geometry(area, attention, " new");
+    let workspace_area = geometry.content;
+    hits.sidebar_section_divider = Rect::default();
     put_text(
         buffer,
         workspace_area.x,
@@ -211,14 +218,7 @@ pub(crate) fn render_sidebar(
     );
 
     let entries = workspace_entries(snapshot, state.collapsed_groups);
-    let body = Rect::new(
-        workspace_area.x,
-        workspace_area.y.saturating_add(WORKSPACE_HEADER_ROWS),
-        workspace_area.width,
-        workspace_area
-            .height
-            .saturating_sub(WORKSPACE_HEADER_ROWS + 1),
-    );
+    let body = geometry.workspace_body;
     hits.workspace_body = body;
     let row_heights = entries
         .iter()
@@ -346,89 +346,51 @@ pub(crate) fn render_sidebar(
     }
 
     if let Some(row) = state.workspace_drop_indicator_row.filter(|row| {
-        *row >= workspace_area.y.saturating_add(1)
-            && *row < workspace_area.bottom().saturating_sub(1)
+        *row >= body.y && *row < body.bottom()
     }) {
         put_text(
             buffer,
             body.x,
             row,
-            body.width,
-            &"─".repeat(body.width as usize),
+            content_width,
+            &"─".repeat(content_width as usize),
             Style::default().fg(palette.accent),
         );
     }
 
-    let footer_y = workspace_area.bottom().saturating_sub(1);
-    if config.mouse_capture {
-        hits.new_workspace = Rect::new(
-            workspace_area.x,
-            footer_y,
-            5.min(workspace_area.width),
-            u16::from(workspace_area.height > 0),
-        );
-        put_text(
-            buffer,
-            workspace_area.x,
-            footer_y,
-            workspace_area.width,
-            " new",
-            Style::default().fg(palette.overlay0),
-        );
-        let attention = super::super::global_menu::global_menu_attention(snapshot);
-        let launcher_width = if attention { 8 } else { 6 }.min(workspace_area.width);
-        hits.global_launcher = Rect::new(
-            workspace_area.right().saturating_sub(launcher_width),
-            footer_y,
-            launcher_width,
-            1,
-        );
-        if attention {
-            let start_x = workspace_area.right().saturating_sub(6);
+    if config.mouse_capture && !geometry.footer.is_empty() {
+        hits.new_workspace = geometry.new_workspace;
+        if !geometry.new_workspace.is_empty() {
             put_text(
                 buffer,
-                start_x,
-                footer_y,
-                2,
-                "● ",
-                Style::default()
-                    .fg(palette.accent)
-                    .add_modifier(Modifier::BOLD),
+                geometry.new_workspace.x,
+                geometry.new_workspace.y,
+                geometry.new_workspace.width,
+                " new",
+                Style::default().fg(palette.overlay0),
             );
+        }
+        hits.global_launcher = geometry.global_launcher;
+        if !geometry.global_launcher.is_empty() {
             put_text(
                 buffer,
-                start_x.saturating_add(2),
-                footer_y,
-                4,
-                "menu",
-                Style::default().fg(palette.overlay0),
-            );
-        } else {
-            put_right_text(
-                buffer,
-                workspace_area,
-                footer_y,
-                "menu",
-                Style::default().fg(palette.overlay0),
+                geometry.global_launcher.x,
+                geometry.global_launcher.y,
+                geometry.global_launcher.width,
+                if attention { "● menu" } else { "menu" },
+                Style::default().fg(if attention {
+                    palette.accent
+                } else {
+                    palette.overlay0
+                }),
             );
         }
     }
 
-    super::render_agent_panel(
-        buffer,
-        detail_area,
-        snapshot,
-        config,
-        state.agent_scroll,
-        hits,
-    );
+    // Desktop is Spaces-only: the agent detail panel remains available to
+    // mobile/navigation projections but is not rendered in this sidebar.
 
-    hits.sidebar_toggle = Rect::new(
-        area.right().saturating_sub(2),
-        area.bottom().saturating_sub(1),
-        u16::from(area.width > 1),
-        u16::from(area.height > 0),
-    );
+    hits.sidebar_toggle = geometry.toggle;
     put_text(
         buffer,
         hits.sidebar_toggle.x,

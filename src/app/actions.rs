@@ -639,6 +639,7 @@ impl AppState {
         true
     }
 
+
     pub(crate) fn terminal_ids_for_workspace(
         &self,
         ws_idx: usize,
@@ -760,6 +761,7 @@ impl AppState {
         if self.workspaces.is_empty() {
             self.active = None;
             self.selected = 0;
+
         } else {
             // Keep focus on the previously focused workspace
             if let Some(id) = active_workspace_id {
@@ -771,6 +773,7 @@ impl AppState {
                 self.selected = self.workspaces.len() - 1;
             }
             self.active = Some(self.selected);
+
         }
     }
 }
@@ -2550,6 +2553,7 @@ mod tests {
         assert_eq!(selected_url("open file:///tmp/report", "file"), None);
     }
 
+
     #[test]
     fn apply_workspace_git_statuses_updates_matching_workspace() {
         let mut state = app_with_workspaces(&["one", "two"]);
@@ -2697,6 +2701,7 @@ mod tests {
         assert_eq!(state.workspaces[0].worktree_space().cloned(), membership);
     }
 
+
     #[test]
     fn switch_workspace_updates_active_and_selected() {
         let mut state = app_with_workspaces(&["a", "b", "c"]);
@@ -2706,6 +2711,7 @@ mod tests {
     }
 
     #[test]
+
     fn switch_workspace_marks_panes_seen() {
         let mut state = app_with_workspaces(&["a", "b"]);
         // Mark a pane in workspace 1 as unseen
@@ -3004,7 +3010,7 @@ mod tests {
     }
 
     #[test]
-    fn active_tab_completion_marks_pane_seen() {
+    fn active_workspace_completion_marks_pane_seen() {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
         state.outer_terminal_focus = Some(true);
@@ -3313,7 +3319,7 @@ mod tests {
     }
 
     #[test]
-    fn delayed_active_tab_unfocused_keeps_client_notification_available() {
+    fn delayed_active_workspace_unfocused_keeps_client_notification_available() {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
         state.outer_terminal_focus = Some(false);
@@ -3713,14 +3719,11 @@ mod tests {
     }
 
     #[test]
-    fn background_toast_includes_tab_name_when_workspace_has_multiple_tabs() {
+    fn background_workspace_sets_attention_toast() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
         state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
-        state.workspaces[1].tabs[0].set_custom_name("main".into());
-        let second_tab = state.workspaces[1].test_add_tab(Some("logs"));
-        state.ensure_test_terminals();
-        let bg_pane_id = state.workspaces[1].tabs[second_tab].root_pane;
+        let bg_pane_id = state.workspaces[1].tabs[0].root_pane;
 
         state.handle_app_event(AppEvent::StateChanged {
             pane_id: bg_pane_id,
@@ -3735,37 +3738,11 @@ mod tests {
         let toast = state.toast.as_ref().unwrap();
         assert_eq!(toast.kind, ToastKind::NeedsAttention);
         assert_eq!(toast.title, "pi needs attention");
-        assert_eq!(toast.context, "background · 2 · logs");
+        assert_eq!(toast.context, "background · 2");
     }
 
     #[test]
-    fn background_tab_in_active_workspace_still_sets_toast() {
-        let mut state = app_with_workspaces(&["active"]);
-        state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
-        state.workspaces[0].tabs[0].set_custom_name("main".into());
-        let second_tab = state.workspaces[0].test_add_tab(Some("logs"));
-        state.ensure_test_terminals();
-        let bg_pane_id = state.workspaces[0].tabs[second_tab].root_pane;
-
-        state.handle_app_event(AppEvent::StateChanged {
-            pane_id: bg_pane_id,
-            agent: Some(Agent::Pi),
-            state: AgentState::Blocked,
-            visible_blocker: false,
-            visible_working: false,
-            process_exited: false,
-            observed_at: std::time::Instant::now(),
-        });
-
-        let toast = state.toast.as_ref().unwrap();
-        assert_eq!(toast.kind, ToastKind::NeedsAttention);
-        assert_eq!(toast.title, "pi needs attention");
-        assert_eq!(toast.context, "active · 1 · logs");
-    }
-
-    #[test]
-    fn active_workspace_active_tab_does_not_set_toast() {
+    fn active_workspace_does_not_set_toast() {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
         state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
@@ -3785,7 +3762,7 @@ mod tests {
     }
 
     #[test]
-    fn active_workspace_active_tab_keeps_herdr_toast_suppressed_when_outer_terminal_is_unfocused() {
+    fn active_workspace_keeps_herdr_toast_suppressed_when_outer_terminal_is_unfocused() {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
         state.outer_terminal_focus = Some(false);
@@ -4082,7 +4059,7 @@ mod tests {
             .publish_pane_process_exit_if_agent(pane_id, false)
             .expect("process exit update");
 
-        assert!(!state.pane_is_in_active_tab(update.ws_idx, pane_id));
+        assert_ne!(state.active, Some(update.ws_idx));
         assert_eq!(update.previous_state, AgentState::Working);
         assert_eq!(update.state, AgentState::Idle);
         assert_eq!(update.agent_label.as_deref(), Some("pi"));
@@ -4112,28 +4089,6 @@ mod tests {
     }
 
     #[test]
-    fn close_tab_removes_unattached_terminal_states() {
-        let mut state = app_with_workspaces(&["test"]);
-        let tab_idx = state.workspaces[0].test_add_tab(Some("logs"));
-        state.ensure_test_terminals();
-        state.workspaces[0].switch_tab(tab_idx);
-        let pane_id = state.workspaces[0].tabs[tab_idx].root_pane;
-        let terminal_id = state.terminal_id_for_pane(0, pane_id).unwrap();
-        state.plugin_panes.insert(
-            pane_id,
-            crate::app::state::PluginPaneRecord {
-                plugin_id: "example.pane".into(),
-                entrypoint: "board".into(),
-            },
-        );
-        state.close_tab();
-
-        assert!(!state.terminals.contains_key(&terminal_id));
-        assert!(!state.plugin_panes.contains_key(&pane_id));
-        state.assert_invariants_for_test();
-    }
-
-    #[test]
     fn close_workspace_removes_unattached_terminal_states() {
         let mut state = app_with_workspaces(&["one", "two"]);
         let pane_id = state.workspaces[0].tabs[0].root_pane;
@@ -4149,23 +4104,6 @@ mod tests {
 
         assert!(!state.terminals.contains_key(&terminal_id));
         assert!(!state.plugin_panes.contains_key(&pane_id));
-        state.assert_invariants_for_test();
-    }
-
-    #[test]
-    fn close_tab_closes_active_workspace_not_selected_workspace() {
-        let mut state = app_with_workspaces(&["selected", "active"]);
-        let active_terminal_id = state
-            .terminal_id_for_pane(1, state.workspaces[1].tabs[0].root_pane)
-            .unwrap();
-        state.active = Some(1);
-        state.selected = 0;
-
-        state.close_tab();
-
-        assert_eq!(state.workspaces.len(), 1);
-        assert_eq!(state.workspaces[0].display_name(), "selected");
-        assert!(!state.terminals.contains_key(&active_terminal_id));
         state.assert_invariants_for_test();
     }
 
