@@ -5626,7 +5626,6 @@ mod tests {
         shutdown_test_runtimes(&mut server);
     }
 
-
     fn window_title_test_server() -> (HeadlessServer, std::sync::mpsc::Receiver<Vec<u8>>) {
         let mut server = test_headless_server();
         server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("herd")];
@@ -8966,7 +8965,7 @@ next_tab = ""
         );
         assert!(!mobile_surface.contains("background"));
 
-        let foreground_terminal_area = Rect::new(26, 1, 94, 39);
+        let foreground_terminal_area = Rect::new(26, 0, 94, 40);
         let expected_pane_size = (
             foreground_terminal_area.height,
             foreground_terminal_area.width.saturating_sub(1),
