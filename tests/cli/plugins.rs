@@ -863,7 +863,7 @@ command = ["sh", "-c", "echo worktree"]
 [[panes]]
 id = "board"
 title = "Board"
-placement = "tab"
+placement = "overlay"
 command = ["sh", "-c", "sleep 5"]
 "#,
     )

@@ -115,6 +115,7 @@ impl App {
         })
     }
 
+
     pub(crate) fn create_workspace_with_options(
         &mut self,
         initial_cwd: PathBuf,
@@ -246,17 +247,6 @@ impl App {
         self.emit_layout_updated_event(ws_idx, 0);
     }
 
-    pub(crate) fn emit_tab_created_events(&mut self, ws_idx: usize, tab_idx: usize) {
-        let Some(tab) = self.tab_info(ws_idx, tab_idx) else {
-            return;
-        };
-        let Some(root_pane) = self.root_pane_info(ws_idx, tab_idx) else {
-            return;
-        };
-        self.emit_tab_and_pane_created_events(tab, root_pane);
-        self.emit_layout_updated_event(ws_idx, tab_idx);
-    }
-
     fn emit_tab_and_pane_created_events(
         &mut self,
         tab: crate::api::schema::TabInfo,
@@ -283,6 +273,7 @@ impl App {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn tab_created_result(
         &self,
         ws_idx: usize,
