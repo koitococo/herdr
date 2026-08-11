@@ -5,6 +5,7 @@ mod panes;
 mod runtime;
 
 use super::responses::{encode_error, encode_success};
+use super::tab_policy::multi_tab_unsupported;
 use crate::api::schema::{
     InstalledPluginInfo, PluginActionInfo, PluginActionInvokeParams, PluginActionListParams,
     PluginLinkParams, PluginListParams, PluginLogListParams, PluginManifestAction,
@@ -441,7 +442,7 @@ impl App {
             PluginPanePlacement::Split | PluginPanePlacement::Zoomed => {
                 self.open_plugin_split_pane(id, params, &plugin, pane, placement)
             }
-            PluginPanePlacement::Tab => self.open_plugin_tab(id, params, &plugin, pane),
+            PluginPanePlacement::Tab => multi_tab_unsupported(id),
         }
     }
 
@@ -706,7 +707,7 @@ fn manifest_actions(
 mod tests {
     use super::*;
     #[cfg(unix)]
-    use crate::api::schema::PaneListParams;
+    use crate::api::schema::{ErrorResponse, PaneListParams};
     use crate::api::schema::{
         Method, PluginSourceInfo, PluginSourceKind, Request, SuccessResponse,
     };
@@ -1675,8 +1676,8 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
     }
 
     #[cfg(unix)]
-    #[tokio::test]
-    async fn plugin_pane_open_tab_emits_tab_created_before_pane_created() {
+    #[test]
+    fn plugin_pane_open_tab_is_rejected_without_events_or_session_dirty() {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
@@ -1691,8 +1692,9 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.mode = crate::app::Mode::Terminal;
+        let terminal_count = app.state.terminals.len();
 
-        let root = unique_temp_path("plugin-pane-tab-events");
+        let root = unique_temp_path("plugin-pane-tab-policy");
         write_manifest_content(
             &root,
             r#"
@@ -1710,8 +1712,9 @@ command = ["sh", "-c", "sleep 1"]
 "#,
         );
         link_manifest(&mut app, &root);
+        app.state.session_dirty = false;
 
-        let open = app.handle_api_request(Request {
+        let response = app.handle_api_request(Request {
             id: "pane-open-tab".into(),
             method: Method::PluginPaneOpen(PluginPaneOpenParams {
                 plugin_id: "example.tab".into(),
@@ -1727,33 +1730,18 @@ command = ["sh", "-c", "sleep 1"]
                 env: std::collections::HashMap::new(),
             }),
         });
-        let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
-            panic!("expected plugin pane opened response: {open}");
-        };
 
-        let events = event_hub
-            .events_after(0)
-            .into_iter()
-            .map(|(_, event)| event.event)
-            .collect::<Vec<_>>();
-        let tab_created = events
-            .iter()
-            .position(|event| *event == crate::api::schema::EventKind::TabCreated)
-            .expect("tab.created should be emitted");
-        let pane_created = events
-            .iter()
-            .position(|event| *event == crate::api::schema::EventKind::PaneCreated)
-            .expect("pane.created should be emitted");
-        let layout_updated = events
-            .iter()
-            .position(|event| *event == crate::api::schema::EventKind::LayoutUpdated)
-            .expect("layout.updated should be emitted");
-        assert!(tab_created < pane_created);
-        assert!(pane_created < layout_updated);
-
-        for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
-        }
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "multi_tab_unsupported");
+        assert_eq!(
+            error.error.message,
+            "multi-tab mutations are not supported; use workspaces instead"
+        );
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_eq!(app.state.terminals.len(), terminal_count);
+        assert!(app.state.plugin_panes.is_empty());
+        assert!(!app.state.session_dirty);
+        assert!(event_hub.events_after(0).is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -3211,9 +3199,9 @@ command = ["sh", "-c", "echo ok"]
             id: "move".into(),
             method: Method::PaneMove(crate::api::schema::PaneMoveParams {
                 pane_id: public_pane_id,
-                destination: crate::api::schema::PaneMoveDestination::NewTab {
-                    workspace_id: None,
+                destination: crate::api::schema::PaneMoveDestination::NewWorkspace {
                     label: Some("moved".into()),
+                    tab_label: None,
                 },
                 focus: true,
             }),

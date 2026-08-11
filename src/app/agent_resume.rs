@@ -551,7 +551,9 @@ mod tests {
 
     #[cfg(not(windows))]
     #[tokio::test]
-    async fn pending_agent_resume_launches_inactive_tab_panes_with_current_terminal_area() {
+    async fn pending_agent_resume_launches_legacy_inactive_tab_panes_with_current_terminal_area() {
+        // Restored legacy snapshots may contain inactive tabs even though the
+        // desktop no longer creates or mutates them.
         let mut app = test_app();
         let mut workspace = crate::workspace::Workspace::test_new("tabs");
         let active_pane = workspace.tabs[0].root_pane;
@@ -616,7 +618,7 @@ mod tests {
 
     #[cfg(not(windows))]
     #[tokio::test]
-    async fn pending_agent_resume_launches_zoom_hidden_active_tab_panes() {
+    async fn pending_agent_resume_launches_zoom_hidden_active_workspace_panes() {
         let mut app = test_app();
         let mut workspace = crate::workspace::Workspace::test_new("zoomed");
         let hidden_pane = workspace.tabs[0].root_pane;

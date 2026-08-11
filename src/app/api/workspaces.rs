@@ -374,20 +374,11 @@ mod tests {
         app.state.workspaces = vec![Workspace::test_new("spaces")];
         app.state.active = Some(0);
         app.state.selected = 0;
-        app.state.ensure_test_terminals();
 
-        // Second tab becomes the focused pane, away from tab 1's root pane.
-        let response = app.handle_tab_create(
-            "tab".into(),
-            crate::api::schema::TabCreateParams {
-                workspace_id: None,
-                cwd: None,
-                focus: true,
-                label: None,
-                env: Default::default(),
-            },
-        );
-        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
+        // A split pane becomes focused, away from the workspace root pane.
+        let focused_pane =
+            app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.state.ensure_test_terminals();
         // Drop runtimes so cwd resolution deterministically uses cached state.
         shutdown_test_runtimes(&mut app);
 
@@ -402,7 +393,6 @@ mod tests {
         std::fs::create_dir_all(&focused_cwd).unwrap();
         let ws = &app.state.workspaces[0];
         let root_cwd = ws.identity_cwd.clone();
-        let focused_pane = ws.focused_pane_id().unwrap();
         assert_ne!(focused_pane, ws.tabs[0].root_pane);
         let terminal_id = ws.terminal_id(focused_pane).cloned().unwrap();
         app.state.terminals.get_mut(&terminal_id).unwrap().cwd = focused_cwd.clone();

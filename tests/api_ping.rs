@@ -508,7 +508,6 @@ fn workspace_list_and_create_round_trip() {
     );
     let recent_text = recent["result"]["read"]["text"].as_str().unwrap();
     assert!(recent_text.contains("beta") || recent_text.contains("gamma"));
-
     for source in ["visible", "detection"] {
         let limited = send_request(
             &socket_path,
@@ -542,6 +541,15 @@ fn workspace_list_and_create_round_trip() {
         .as_str()
         .unwrap()
         .contains("gamma"));
+    let recent = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"req_11","method":"pane.read","params":{{"pane_id":"{}","source":"recent","lines":20}}}}"#,
+            pane_id
+        ),
+    );
+    let recent_text = recent["result"]["read"]["text"].as_str().unwrap();
+    assert!(recent_text.contains("beta") || recent_text.contains("gamma"));
 
     let send_input = send_request(
         &socket_path,
@@ -596,7 +604,7 @@ fn workspace_list_and_create_round_trip() {
 
 #[cfg(not(target_os = "macos"))]
 #[test]
-fn tab_methods_round_trip_over_socket() {
+fn tab_read_methods_preserve_single_tab_and_mutations_are_rejected_over_socket() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -623,92 +631,72 @@ fn tab_methods_round_trip_over_socket() {
         .to_string();
     assert_eq!(first_tab_id, format!("{workspace_id}:t1"));
 
-    let tab_created = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_t2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
-            workspace_id
-        ),
-    );
-    assert_eq!(tab_created["result"]["type"], "tab_created");
-    let second_tab_id = tab_created["result"]["tab"]["tab_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let second_root_pane_id = tab_created["result"]["root_pane"]["pane_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let second_root_terminal_id = tab_created["result"]["root_pane"]["terminal_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(second_root_terminal_id.starts_with("term_"));
-    assert_ne!(second_root_terminal_id, second_root_pane_id);
-    assert_eq!(second_tab_id, format!("{workspace_id}:t2"));
-    assert_eq!(tab_created["result"]["tab"]["focused"], true);
-    assert_eq!(tab_created["result"]["root_pane"]["tab_id"], second_tab_id);
-
     let tab_list = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t3","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
+            r#"{{"id":"req_t2","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
             workspace_id
         ),
     );
-    let tabs = tab_list["result"]["tabs"].as_array().unwrap();
-    assert_eq!(tabs.len(), 2);
+    let tabs_before = tab_list["result"]["tabs"].clone();
+    let tabs = tabs_before.as_array().unwrap();
+    assert_eq!(tabs.len(), 1);
     assert_eq!(tabs[0]["tab_id"], first_tab_id);
-
-    let panes = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_t3b","method":"pane.list","params":{{"workspace_id":"{}"}}}}"#,
-            workspace_id
-        ),
-    );
-    let panes = panes["result"]["panes"].as_array().unwrap();
-    assert!(panes.iter().any(|pane| {
-        pane["pane_id"] == second_root_pane_id && pane["terminal_id"] == second_root_terminal_id
-    }));
-    assert_eq!(tabs[1]["tab_id"], second_tab_id);
+    assert_eq!(tabs[0]["focused"], true);
 
     let tab_get = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t4","method":"tab.get","params":{{"tab_id":"{}"}}}}"#,
-            second_tab_id
-        ),
-    );
-    assert_eq!(tab_get["result"]["tab"]["tab_id"], second_tab_id);
-
-    let renamed = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_t5","method":"tab.rename","params":{{"tab_id":"{}","label":"logs"}}}}"#,
-            second_tab_id
-        ),
-    );
-    assert_eq!(renamed["result"]["tab"]["label"], "logs");
-
-    let focused = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_t6","method":"tab.focus","params":{{"tab_id":"{}"}}}}"#,
+            r#"{{"id":"req_t3","method":"tab.get","params":{{"tab_id":"{}"}}}}"#,
             first_tab_id
         ),
     );
-    assert_eq!(focused["result"]["tab"]["tab_id"], first_tab_id);
-    assert_eq!(focused["result"]["tab"]["focused"], true);
+    assert_eq!(tab_get["result"]["tab"]["tab_id"], first_tab_id);
 
-    let closed = send_request(
+    let rejected_create = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"req_t4","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+            workspace_id
+        ),
+    );
+    assert_eq!(rejected_create["error"]["code"], "multi_tab_unsupported");
+
+    let rejected_rename = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"req_t5","method":"tab.rename","params":{{"tab_id":"{}","label":"logs"}}}}"#,
+            first_tab_id
+        ),
+    );
+    assert_eq!(rejected_rename["error"]["code"], "multi_tab_unsupported");
+
+    let unknown_focus = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"req_t6","method":"tab.focus","params":{{"tab_id":"{}:t2"}}}}"#,
+            workspace_id
+        ),
+    );
+    assert_eq!(unknown_focus["error"]["code"], "tab_not_found");
+
+    let rejected_close = send_request(
         &socket_path,
         &format!(
             r#"{{"id":"req_t7","method":"tab.close","params":{{"tab_id":"{}"}}}}"#,
-            second_tab_id
+            first_tab_id
         ),
     );
-    assert_eq!(closed["result"]["type"], "ok");
+    assert_eq!(rejected_close["error"]["code"], "multi_tab_unsupported");
+
+    let tab_list_after = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"req_t8","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
+            workspace_id
+        ),
+    );
+    assert_eq!(tab_list_after["result"]["tabs"], tabs_before);
 
     cleanup_spawned_herdr(child, base);
 }
@@ -900,10 +888,6 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
         .as_str()
         .unwrap()
         .to_string();
-    let workspace_id = created["result"]["workspace"]["workspace_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
     let command = format!(
         "/bin/sh -c 'printf %s $$ > {}; (cd {} && touch {} && sleep 30) & printf %s $! > {}; while [ ! -e {} ]; do sleep 0.01; done; touch {}; wait'",
         leader_pid_file.display(),
@@ -988,23 +972,6 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
         .to_string(),
     );
     assert_eq!(split["result"]["pane"]["cwd"], base.display().to_string());
-
-    let tab = send_request(
-        &socket_path,
-        &serde_json::json!({
-            "id": "member_tab",
-            "method": "tab.create",
-            "params": {
-                "workspace_id": workspace_id,
-                "focus": false,
-            },
-        })
-        .to_string(),
-    );
-    assert_eq!(
-        tab["result"]["root_pane"]["cwd"],
-        base.display().to_string()
-    );
 
     cleanup_spawned_herdr(child, base);
 }
@@ -1109,7 +1076,7 @@ fn agent_methods_round_trip_over_socket() {
             base.display()
         ),
     );
-    let workspace_id = created["result"]["workspace"]["workspace_id"]
+    let first_tab_id = created["result"]["workspace"]["active_tab_id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -1192,20 +1159,26 @@ fn agent_methods_round_trip_over_socket() {
     );
     assert_eq!(sent["error"]["code"], "agent_not_ready");
 
-    let tab_created = send_request(
+    let split = send_request(
         &socket_path,
-        &format!(
-            r#"{{"id":"agent_tab","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
-            workspace_id
-        ),
+        &serde_json::json!({
+            "id": "agent_split",
+            "method": "pane.split",
+            "params": {
+                "target_pane_id": pane_id,
+                "direction": "right",
+                "focus": false,
+            },
+        })
+        .to_string(),
     );
-    let second_tab_id = tab_created["result"]["tab"]["tab_id"].as_str().unwrap();
-    let second_pane_id = tab_created["result"]["root_pane"]["pane_id"]
+    let second_tab_id = split["result"]["pane"]["tab_id"]
         .as_str()
-        .unwrap();
-    let second_terminal_id = tab_created["result"]["root_pane"]["terminal_id"]
-        .as_str()
-        .unwrap();
+        .unwrap()
+        .to_string();
+    assert_eq!(second_tab_id, first_tab_id);
+    let second_pane_id = split["result"]["pane"]["pane_id"].as_str().unwrap();
+    let second_terminal_id = split["result"]["pane"]["terminal_id"].as_str().unwrap();
 
     let second_reported = send_request(
         &socket_path,
@@ -1256,7 +1229,7 @@ fn agent_methods_round_trip_over_socket() {
 }
 
 #[test]
-fn tab_create_with_no_focus_preserves_active_tab() {
+fn tab_create_without_focus_is_rejected_without_changing_active_tab() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -1277,45 +1250,46 @@ fn tab_create_with_no_focus_preserves_active_tab() {
         .as_str()
         .unwrap()
         .to_string();
-    let first_tab_id = created["result"]["tab"]["tab_id"]
+    let first_tab_id = created["result"]["workspace"]["active_tab_id"]
         .as_str()
         .unwrap()
         .to_string();
 
-    let tab_created = send_request(
+    let tabs_before = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_nf_2","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
+            r#"{{"id":"req_nf_2","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
             workspace_id
         ),
-    );
-    assert_eq!(tab_created["result"]["type"], "tab_created");
-    let second_tab_id = tab_created["result"]["tab"]["tab_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert_eq!(second_tab_id, format!("{workspace_id}:t2"));
-    assert_eq!(tab_created["result"]["tab"]["focused"], false);
+    )["result"]["tabs"]
+        .clone();
 
-    let tab_list = send_request(
+    let rejected_create = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_nf_3","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
+            r#"{{"id":"req_nf_3","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
             workspace_id
         ),
     );
-    let tabs = tab_list["result"]["tabs"].as_array().unwrap();
-    assert_eq!(tabs[0]["tab_id"], first_tab_id);
-    assert_eq!(tabs[0]["focused"], true);
-    assert_eq!(tabs[1]["tab_id"], second_tab_id);
-    assert_eq!(tabs[1]["focused"], false);
+    assert_eq!(rejected_create["error"]["code"], "multi_tab_unsupported");
+
+    let tabs_after = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"req_nf_4","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
+            workspace_id
+        ),
+    );
+    assert_eq!(tabs_after["result"]["tabs"], tabs_before);
+    assert_eq!(tabs_after["result"]["tabs"][0]["tab_id"], first_tab_id);
+    assert_eq!(tabs_after["result"]["tabs"][0]["focused"], true);
 
     cleanup_spawned_herdr(child, base);
 }
 
 #[cfg(not(target_os = "macos"))]
 #[test]
-fn events_subscribe_streams_workspace_tab_and_agent_events() {
+fn events_subscribe_streams_workspace_and_agent_events_without_rejected_tab_events() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -1425,35 +1399,29 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
     assert_eq!(agent_detected["data"]["pane_id"], pane_id);
     assert_eq!(agent_detected["data"]["agent"], "pi");
 
-    let new_tab = send_request(
+    let rejected_create = send_request(
         &socket_path,
         &format!(
             r#"{{"id":"req_l4","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
             workspace_id
         ),
     );
-    let second_tab_id = new_tab["result"]["tab"]["tab_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert_eq!(second_tab_id, format!("{workspace_id}:t2"));
+    assert_eq!(rejected_create["error"]["code"], "multi_tab_unsupported");
 
-    let created_tab_event = wait_for_event(&mut reader, "tab_created", Duration::from_secs(2));
-    assert_eq!(created_tab_event["data"]["tab"]["tab_id"], second_tab_id);
-    let focused_tab_event = wait_for_event(&mut reader, "tab_focused", Duration::from_secs(2));
-    assert_eq!(focused_tab_event["data"]["tab_id"], second_tab_id);
-
-    let renamed_tab = send_request(
+    let rejected_rename = send_request(
         &socket_path,
         &format!(
             r#"{{"id":"req_l5","method":"tab.rename","params":{{"tab_id":"{}","label":"logs"}}}}"#,
-            second_tab_id
+            first_tab_id
         ),
     );
-    assert_eq!(renamed_tab["result"]["tab"]["label"], "logs");
-    let renamed_event = wait_for_event(&mut reader, "tab_renamed", Duration::from_secs(2));
-    assert_eq!(renamed_event["data"]["tab_id"], second_tab_id);
-    assert_eq!(renamed_event["data"]["label"], "logs");
+    assert_eq!(rejected_rename["error"]["code"], "multi_tab_unsupported");
+    assert!(
+        reader
+            .try_read_json_line(Duration::from_millis(500))
+            .is_none(),
+        "rejected tab mutations emitted an event"
+    );
 
     cleanup_spawned_herdr(child, base);
 }
@@ -1537,7 +1505,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
 
 #[cfg(not(target_os = "macos"))]
 #[test]
-fn events_subscribe_streams_tab_and_workspace_close_events() {
+fn events_subscribe_streams_workspace_close_events_without_rejected_tab_events() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -1558,15 +1526,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
         .as_str()
         .unwrap()
         .to_string();
-
-    let new_tab = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_tc_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
-            workspace_id
-        ),
-    );
-    let second_tab_id = new_tab["result"]["tab"]["tab_id"]
+    let first_tab_id = created["result"]["workspace"]["active_tab_id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -1580,22 +1540,25 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
     assert_eq!(ack["id"], "sub_life_c");
     assert_eq!(ack["result"]["type"], "subscription_started");
 
-    let closed_tab = send_request(
+    let rejected_close = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_tc_3","method":"tab.close","params":{{"tab_id":"{}:2"}}}}"#,
-            workspace_id
+            r#"{{"id":"req_tc_2","method":"tab.close","params":{{"tab_id":"{}"}}}}"#,
+            first_tab_id
         ),
     );
-    assert_eq!(closed_tab["result"]["type"], "ok");
-
-    let tab_closed = wait_for_event(&mut reader, "tab_closed", Duration::from_secs(2));
-    assert_eq!(tab_closed["data"]["tab_id"], second_tab_id);
+    assert_eq!(rejected_close["error"]["code"], "multi_tab_unsupported");
+    assert!(
+        reader
+            .try_read_json_line(Duration::from_millis(500))
+            .is_none(),
+        "rejected tab close emitted an event"
+    );
 
     let renamed_ws = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_tc_4","method":"workspace.rename","params":{{"workspace_id":"{}","label":"renamed"}}}}"#,
+            r#"{{"id":"req_tc_3","method":"workspace.rename","params":{{"workspace_id":"{}","label":"renamed"}}}}"#,
             workspace_id
         ),
     );
@@ -1608,7 +1571,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
 
     let closed_ws = send_request(
         &socket_path,
-        r#"{"id":"req_tc_5","method":"workspace.close","params":{"workspace_id":"1"}}"#,
+        r#"{"id":"req_tc_4","method":"workspace.close","params":{"workspace_id":"1"}}"#,
     );
     assert_eq!(closed_ws["result"]["type"], "ok");
 
@@ -2332,23 +2295,24 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
             base.display()
         ),
     );
-    let workspace_id = created["result"]["workspace"]["workspace_id"]
+    let foreground_workspace_id = created["result"]["workspace"]["workspace_id"]
         .as_str()
-        .unwrap()
-        .to_string();
-    let background_pane_id = created["result"]["root_pane"]["pane_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let tab_created = send_request(
+        .unwrap();
+    let background = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_status_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
-            workspace_id
+            r#"{{"id":"req_status_2","method":"workspace.create","params":{{"cwd":"{}","focus":false}}}}"#,
+            base.display()
         ),
     );
-    assert_eq!(tab_created["result"]["type"], "tab_created");
+    assert_ne!(
+        background["result"]["workspace"]["workspace_id"],
+        foreground_workspace_id
+    );
+    let background_pane_id = background["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let mut reader = open_subscription(
         &socket_path,
@@ -2410,18 +2374,14 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     assert_eq!(initial_status_event["data"]["agent_status"], "done");
     assert_eq!(initial_status_event["data"]["agent"], "pi");
 
-    let focused_tab_id = created["result"]["workspace"]["active_tab_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let tab_focus = send_request(
+    let pane_focus = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_status_6","method":"tab.focus","params":{{"tab_id":"{}"}}}}"#,
-            focused_tab_id
+            r#"{{"id":"req_status_6","method":"pane.focus","params":{{"pane_id":"{}"}}}}"#,
+            background_pane_id
         ),
     );
-    assert_eq!(tab_focus["result"]["type"], "tab_info");
+    assert_eq!(pane_focus["result"]["type"], "pane_info");
 
     let pane_after_focus = send_request(
         &socket_path,

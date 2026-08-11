@@ -5503,19 +5503,6 @@ mod tests {
         assert_eq!(first.terminal_title.as_deref(), Some("⠋ task"));
         assert_eq!(first.terminal_title_stripped.as_deref(), Some("task"));
         assert_eq!(pane_updated_events(&event_hub), 1);
-        let (buffer, _) = crate::server::render_stream::render_virtual_with_runtime_registry(
-            &mut server.app.state,
-            &server.app.terminal_runtimes,
-            Rect::new(0, 0, 100, 30),
-            true,
-            crate::kitty_graphics::HostCellSize::default(),
-        );
-        let rendered = buffer
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(rendered.contains("task"), "rendered frame: {rendered:?}");
 
         server
             .app
@@ -5639,44 +5626,6 @@ mod tests {
         shutdown_test_runtimes(&mut server);
     }
 
-    #[tokio::test]
-    async fn headless_deferred_named_tab_create_uses_runtime_events() {
-        let event_hub = api::EventHub::default();
-        let mut server = test_headless_server_with_event_hub(event_hub.clone());
-        server
-            .app
-            .create_workspace_with_options(std::env::temp_dir(), true)
-            .unwrap();
-        let after_setup = event_hub.current_sequence();
-
-        server.app.state.request_new_tab = true;
-        server.app.state.requested_new_tab_name = Some("ops".into());
-
-        assert!(server.handle_deferred_requests_headless());
-        assert!(!server.app.state.request_new_tab);
-        assert_eq!(server.app.state.requested_new_tab_name, None);
-        let events = event_hub.events_after(after_setup);
-        assert_eq!(
-            events
-                .iter()
-                .map(|(_, event)| event.event)
-                .collect::<Vec<_>>(),
-            vec![
-                api::schema::EventKind::TabCreated,
-                api::schema::EventKind::PaneCreated,
-                api::schema::EventKind::LayoutUpdated,
-            ]
-        );
-        let tab_created = events
-            .iter()
-            .find_map(|(_, event)| match &event.data {
-                api::schema::EventData::TabCreated { tab } => Some(tab),
-                _ => None,
-            })
-            .expect("tab created event");
-        assert_eq!(tab_created.label, "ops");
-        shutdown_test_runtimes(&mut server);
-    }
 
     fn window_title_test_server() -> (HeadlessServer, std::sync::mpsc::Receiver<Vec<u8>>) {
         let mut server = test_headless_server();

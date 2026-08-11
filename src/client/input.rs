@@ -738,7 +738,6 @@ mod tests {
             );
         }
 
-
         assert!(std::hint::black_box(long) > 100);
     }
 }

@@ -185,6 +185,13 @@ impl App {
         action: NavigateAction,
         context: ActionContext,
     ) {
+        if self.state.view.layout != crate::app::state::ViewLayout::Mobile
+            && is_tab_navigation_action(action)
+        {
+            leave_navigate_mode(&mut self.state);
+            return;
+        }
+
         let previous_mode = self.state.mode;
         match action {
             NavigateAction::NewWorkspace => {
@@ -252,7 +259,6 @@ impl App {
             NavigateAction::FocusAgent(idx) => {
                 if let Some((ws_idx, pane_id)) = self.agent_entry_target(idx) {
                     self.focus_pane_internal_via_api(ws_idx, pane_id);
-                    self.state.ensure_agent_panel_entry_visible(idx);
                     leave_navigate_mode(&mut self.state);
                 }
             }
@@ -273,16 +279,14 @@ impl App {
                 }
             }
             NavigateAction::PreviousAgent => {
-                if let Some((idx, ws_idx, pane_id)) = self.relative_agent_entry(false) {
+                if let Some((_, ws_idx, pane_id)) = self.relative_agent_entry(false) {
                     self.focus_pane_internal_via_api(ws_idx, pane_id);
-                    self.state.ensure_agent_panel_entry_visible(idx);
                     leave_navigate_mode(&mut self.state);
                 }
             }
             NavigateAction::NextAgent => {
-                if let Some((idx, ws_idx, pane_id)) = self.relative_agent_entry(true) {
+                if let Some((_, ws_idx, pane_id)) = self.relative_agent_entry(true) {
                     self.focus_pane_internal_via_api(ws_idx, pane_id);
-                    self.state.ensure_agent_panel_entry_visible(idx);
                     leave_navigate_mode(&mut self.state);
                 }
             }
@@ -1433,6 +1437,20 @@ pub(crate) enum NavigateAction {
     OpenNavigator,
 }
 
+fn is_tab_navigation_action(action: NavigateAction) -> bool {
+    matches!(
+        action,
+        NavigateAction::SwitchTab(_)
+            | NavigateAction::NewTab
+            | NavigateAction::RenameTab
+            | NavigateAction::PreviousTab
+            | NavigateAction::NextTab
+            | NavigateAction::MoveTabPrevious
+            | NavigateAction::MoveTabNext
+            | NavigateAction::CloseTab
+    )
+}
+
 fn copy_mode_survives_prefix_action(action: NavigateAction) -> bool {
     matches!(
         action,
@@ -1644,6 +1662,13 @@ pub(super) fn execute_navigate_action_in_context(
     action: NavigateAction,
     context: ActionContext,
 ) {
+    if state.view.layout != crate::app::state::ViewLayout::Mobile
+        && is_tab_navigation_action(action)
+    {
+        leave_navigate_mode(state);
+        return;
+    }
+
     let previous_mode = state.mode;
     match action {
         NavigateAction::NewWorkspace => {
@@ -1748,12 +1773,7 @@ pub(super) fn execute_navigate_action_in_context(
             state.next_tab();
             leave_navigate_mode(state);
         }
-        NavigateAction::MoveTabPrevious => {
-            move_active_tab_relative(state, -1);
-            leave_navigate_mode(state);
-        }
-        NavigateAction::MoveTabNext => {
-            move_active_tab_relative(state, 1);
+        NavigateAction::MoveTabPrevious | NavigateAction::MoveTabNext => {
             leave_navigate_mode(state);
         }
         NavigateAction::CloseTab => {
@@ -1912,20 +1932,6 @@ fn tab_move_insert_index(len: usize, source: usize, delta: isize) -> Option<usiz
     } else {
         source - 1
     })
-}
-
-#[cfg(test)]
-fn move_active_tab_relative(state: &mut AppState, delta: isize) {
-    let Some(ws) = state
-        .active
-        .and_then(|ws_idx| state.workspaces.get_mut(ws_idx))
-    else {
-        return;
-    };
-    let source = ws.active_tab;
-    if let Some(insert) = tab_move_insert_index(ws.tabs.len(), source, delta) {
-        ws.move_tab(source, insert);
-    }
 }
 
 fn leave_navigate_mode(state: &mut AppState) {
@@ -2726,63 +2732,7 @@ resize_pane_left = "prefix+shift+left"
     }
 
     #[test]
-    fn terminal_direct_move_tab_shortcut_maps_to_navigation_action() {
-        let mut state = state_with_workspaces(&["test"]);
-        state.keybinds.move_tab_next = crate::config::ActionKeybinds::direct("alt+shift+right");
-
-        let action = terminal_direct_navigation_action(
-            &state,
-            TerminalKey::new(KeyCode::Right, KeyModifiers::ALT | KeyModifiers::SHIFT),
-        );
-
-        assert_eq!(action, Some(NavigateAction::MoveTabNext));
-    }
-
-    fn tab_labels(state: &AppState) -> Vec<String> {
-        let ws = &state.workspaces[0];
-        (0..ws.tabs.len())
-            .map(|tab_idx| ws.tab_display_name(tab_idx).unwrap())
-            .collect()
-    }
-
-    #[test]
-    fn move_tab_actions_reorder_and_wrap_the_active_tab() {
-        let mut state = state_with_workspaces(&["test"]);
-        {
-            let ws = &mut state.workspaces[0];
-            ws.tabs[0].set_custom_name("a".into());
-            ws.test_add_tab(Some("b"));
-            ws.test_add_tab(Some("c"));
-            ws.switch_tab(1);
-        }
-
-        execute_navigate_action(&mut state, NavigateAction::MoveTabNext);
-        assert_eq!(tab_labels(&state), vec!["a", "c", "b"]);
-        assert_eq!(state.workspaces[0].active_tab, 2);
-
-        execute_navigate_action(&mut state, NavigateAction::MoveTabNext);
-        assert_eq!(tab_labels(&state), vec!["b", "a", "c"]);
-        assert_eq!(state.workspaces[0].active_tab, 0);
-
-        execute_navigate_action(&mut state, NavigateAction::MoveTabPrevious);
-        assert_eq!(tab_labels(&state), vec!["a", "c", "b"]);
-        assert_eq!(state.workspaces[0].active_tab, 2);
-        state.workspaces[0].assert_invariants_for_test();
-    }
-
-    #[test]
-    fn move_tab_is_a_noop_with_a_single_tab() {
-        let mut state = state_with_workspaces(&["test"]);
-        state.workspaces[0].tabs[0].set_custom_name("only".into());
-
-        execute_navigate_action(&mut state, NavigateAction::MoveTabNext);
-
-        assert_eq!(tab_labels(&state), vec!["only"]);
-        assert_eq!(state.workspaces[0].active_tab, 0);
-    }
-
-    #[test]
-    fn move_tab_with_a_single_tab_still_exits_navigate_mode() {
+    fn desktop_tab_move_exits_navigate_without_mutation() {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = crate::app::App::new(
@@ -3408,7 +3358,7 @@ navigate_pane_down = "ctrl+j"
             ActionContext::Prefix,
         );
 
-        assert_eq!(state.mode, Mode::Navigate);
+        assert_eq!(state.mode, Mode::Prefix);
         assert!(!state.creating_new_tab);
         assert!(!state.request_new_tab);
         assert!(state.workspaces.is_empty());
@@ -3454,7 +3404,7 @@ navigate_pane_down = "ctrl+j"
     }
 
     #[test]
-    fn tui_close_tab_last_parent_group_workspace_opens_confirmation_via_api() {
+    fn tui_close_workspace_parent_group_opens_confirmation_via_api() {
         let mut app = app_with_test_workspaces(&["main", "issue"]);
         mark_worktree_space_member(&mut app.state, 0, "repo-key");
         mark_worktree_space_member(&mut app.state, 1, "repo-key");
@@ -3462,9 +3412,8 @@ navigate_pane_down = "ctrl+j"
         app.state.selected = 1;
         app.state.mode = Mode::Navigate;
 
-        app.execute_tui_navigate_action(NavigateAction::CloseTab, ActionContext::Navigate);
-
-        assert_eq!(app.state.selected, 0);
+        app.execute_tui_navigate_action(NavigateAction::CloseWorkspace, ActionContext::Navigate);
+        assert_eq!(app.state.selected, 1);
         assert_eq!(app.state.mode, Mode::ConfirmClose);
         assert_eq!(app.state.workspaces.len(), 2);
     }
@@ -3759,8 +3708,9 @@ navigate_pane_down = "ctrl+j"
     }
 
     #[test]
-    fn new_tab_action_opens_dialog_without_creating_tab() {
+    fn mobile_new_tab_action_opens_dialog_without_creating_tab() {
         let mut state = state_with_workspaces(&["test"]);
+        state.view.layout = crate::app::state::ViewLayout::Mobile;
 
         execute_navigate_action(&mut state, NavigateAction::NewTab);
 
@@ -3773,8 +3723,9 @@ navigate_pane_down = "ctrl+j"
     }
 
     #[test]
-    fn new_tab_action_can_skip_rename_dialog() {
+    fn mobile_new_tab_action_can_skip_rename_dialog() {
         let mut state = state_with_workspaces(&["test"]);
+        state.view.layout = crate::app::state::ViewLayout::Mobile;
         state.prompt_new_tab_name = false;
 
         execute_navigate_action(&mut state, NavigateAction::NewTab);

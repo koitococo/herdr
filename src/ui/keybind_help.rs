@@ -14,7 +14,7 @@ use super::widgets::{
     modal_stack_areas, panel_contrast_fg, render_action_button, render_modal_header,
     render_modal_shell,
 };
-use crate::app::AppState;
+use crate::app::{state::ViewLayout, AppState};
 
 pub(super) type HelpEntry = (String, Cow<'static, str>);
 pub(super) type HelpGroup = (&'static str, Vec<HelpEntry>);
@@ -109,7 +109,7 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
         ],
     ));
 
-    let workspace_tab = vec![
+    let mut workspace_tab = vec![
         help_entry(keybind_label(&kb.workspace_picker), "workspace navigation"),
         help_entry(keybind_label(&kb.goto), "session navigator"),
         help_entry(keybind_label(&kb.new_workspace), "new workspace"),
@@ -127,15 +127,19 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
         help_entry(keybind_label(&kb.previous_agent), "previous agent"),
         help_entry(keybind_label(&kb.next_agent), "next agent"),
         help_entry(indexed_label(&kb.focus_agent), "focus agent 1-9"),
-        help_entry(keybind_label(&kb.new_tab), "new tab"),
-        help_entry(keybind_label(&kb.rename_tab), "rename tab"),
-        help_entry(keybind_label(&kb.previous_tab), "previous tab"),
-        help_entry(keybind_label(&kb.next_tab), "next tab"),
-        help_entry(keybind_label(&kb.move_tab_previous), "move tab left"),
-        help_entry(keybind_label(&kb.move_tab_next), "move tab right"),
-        help_entry(indexed_label(&kb.switch_tab), "switch tab 1-9"),
-        help_entry(keybind_label(&kb.close_tab), "close tab"),
     ];
+    if app.view.layout == ViewLayout::Mobile {
+        workspace_tab.extend([
+            help_entry(keybind_label(&kb.new_tab), "new tab"),
+            help_entry(keybind_label(&kb.rename_tab), "rename tab"),
+            help_entry(keybind_label(&kb.previous_tab), "previous tab"),
+            help_entry(keybind_label(&kb.next_tab), "next tab"),
+            help_entry(keybind_label(&kb.move_tab_previous), "move tab left"),
+            help_entry(keybind_label(&kb.move_tab_next), "move tab right"),
+            help_entry(indexed_label(&kb.switch_tab), "switch tab 1-9"),
+            help_entry(keybind_label(&kb.close_tab), "close tab"),
+        ]);
+    }
     groups.push(("workspaces / tabs", workspace_tab));
 
     let panes = vec![

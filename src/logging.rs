@@ -254,19 +254,6 @@ pub(crate) fn workspace_renamed(workspace_id: &str) {
     );
 }
 
-#[cfg(test)]
-pub(crate) fn tab_created(workspace_id: &str, tab_id: &str, root_pane_id: u32) {
-    tracing::info!(
-        event = "tab.create",
-        subsystem = "tab",
-        outcome = "ok",
-        workspace_id,
-        tab_id,
-        pane_id = root_pane_id,
-        "tab created"
-    );
-}
-
 pub(crate) fn tab_focused(workspace_id: &str, tab_id: &str) {
     tracing::info!(
         event = "tab.focus",
@@ -287,17 +274,6 @@ pub(crate) fn tab_closed(workspace_id: &str, tab_id: &str) {
         workspace_id,
         tab_id,
         "tab closed"
-    );
-}
-
-pub(crate) fn tab_renamed(workspace_id: &str, tab_id: &str) {
-    tracing::info!(
-        event = "tab.rename",
-        subsystem = "tab",
-        outcome = "ok",
-        workspace_id,
-        tab_id,
-        "tab renamed"
     );
 }
 

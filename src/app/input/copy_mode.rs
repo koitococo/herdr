@@ -1310,41 +1310,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn copy_mode_clears_when_source_tab_closes_after_focus_away() {
-        let (mut app, first_pane, _) = app_with_split_copy_screen(b"alpha\nbeta\n");
-        let survivor_tab = app.state.workspaces[0].test_add_tab(Some("survivor"));
-        let survivor_pane = app.state.workspaces[0].tabs[survivor_tab].root_pane;
-        let survivor_terminal = app.state.workspaces[0].tabs[survivor_tab].panes[&survivor_pane]
-            .attached_terminal_id
-            .clone();
-        app.state.terminals.insert(
-            survivor_terminal.clone(),
-            crate::terminal::TerminalState::new(survivor_terminal, "/tmp".into()),
-        );
-        app.state.enter_copy_mode(&app.terminal_runtimes);
-        assert_eq!(
-            app.state.copy_mode.as_ref().expect("copy mode").pane_id,
-            first_pane
-        );
-
-        app.handle_key(TerminalKey::new(
-            app.state.prefix_code,
-            app.state.prefix_mods,
-        ))
-        .await;
-        app.handle_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()))
-            .await;
-        assert_eq!(app.state.mode, Mode::Terminal);
-        assert!(app.state.copy_mode.is_some());
-
-        assert!(!app.state.close_tab());
-
-        assert_eq!(app.state.mode, Mode::Terminal);
-        assert!(app.state.copy_mode.is_none());
-        app.state.assert_invariants_for_test();
-    }
-
-    #[tokio::test]
     async fn copy_mode_ctrl_f_uses_page_down() {
         let bytes = numbered_lines_bytes(64);
         let (mut app, pane_id) = app_with_copy_scrollback(&bytes);
@@ -2127,26 +2092,6 @@ mod tests {
             AppEvent::ClipboardWrite { content } => assert_eq!(content, b"alp"),
             other => panic!("unexpected event: {other:?}"),
         }
-        assert_eq!(app.state.mode, Mode::Terminal);
-        assert!(app.state.copy_mode.is_none());
-    }
-
-    #[tokio::test]
-    async fn copy_mode_same_tab_switch_preserves_selection() {
-        let (mut app, _) = app_with_copy_screen(b"alpha\nbeta\n");
-        app.state.enter_copy_mode(&app.terminal_runtimes);
-        if let Some(copy_mode) = app.state.copy_mode.as_mut() {
-            copy_mode.cursor_row = 0;
-            copy_mode.cursor_col = 0;
-        }
-        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('v'), KeyModifiers::empty()));
-        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()));
-        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()));
-
-        assert!(app.state.switch_workspace_tab(0, 0));
-
-        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('y'), KeyModifiers::empty()));
-        assert_eq!(copy_mode_clipboard_text(&mut app), "alp");
         assert_eq!(app.state.mode, Mode::Terminal);
         assert!(app.state.copy_mode.is_none());
     }

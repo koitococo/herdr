@@ -587,17 +587,11 @@ impl App {
             workspace_scroll: 0,
             agent_panel_scroll: 0,
             tab_scroll: 0,
-            tab_scroll_follow_active: true,
             mobile_switcher_scroll: 0,
             view: state::ViewState {
                 layout: state::ViewLayout::Desktop,
                 sidebar_rect: Rect::default(),
                 workspace_card_areas: Vec::new(),
-                tab_bar_rect: Rect::default(),
-                tab_hit_areas: Vec::new(),
-                tab_scroll_left_hit_area: Rect::default(),
-                tab_scroll_right_hit_area: Rect::default(),
-                new_tab_hit_area: Rect::default(),
                 terminal_area: Rect::default(),
                 mobile_header_rect: Rect::default(),
                 mobile_menu_hit_area: Rect::default(),
@@ -607,7 +601,6 @@ impl App {
             },
             drag: None,
             workspace_presses: HashMap::new(),
-            tab_presses: HashMap::new(),
             selection: None,
             selection_autoscroll: None,
             context_menu: None,
@@ -653,8 +646,6 @@ impl App {
             pane_scrollbars: config.ui.pane_scrollbars,
             pane_gaps: config.ui.pane_gaps,
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
-            hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
-            tab_bar_position: config.ui.tab_bar_position,
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: String::new(),
             pane_history_persistence: config.experimental.pane_history,
@@ -992,16 +983,18 @@ impl App {
             if self.state.request_new_tab {
                 self.state.request_new_tab = false;
                 let label = self.state.requested_new_tab_name.take();
-                self.runtime_tab_create(
-                    "tui.tab.create",
-                    crate::api::schema::TabCreateParams {
-                        workspace_id: None,
-                        cwd: None,
-                        focus: true,
-                        label,
-                        env: Default::default(),
-                    },
-                );
+                if self.state.view.layout == state::ViewLayout::Mobile {
+                    self.runtime_tab_create(
+                        "tui.tab.create",
+                        crate::api::schema::TabCreateParams {
+                            workspace_id: None,
+                            cwd: None,
+                            focus: true,
+                            label,
+                            env: Default::default(),
+                        },
+                    );
+                }
                 needs_render = true;
             }
 
@@ -1500,8 +1493,6 @@ impl App {
                 self.state.pane_gaps = config.ui.pane_gaps;
                 self.state.show_agent_labels_on_pane_borders =
                     config.ui.show_agent_labels_on_pane_borders;
-                self.state.hide_tab_bar_when_single_tab = config.ui.hide_tab_bar_when_single_tab;
-                self.state.tab_bar_position = config.ui.tab_bar_position;
                 self.configure_tab_bar_status(
                     &config.ui.tab_bar_right,
                     &config.ui.tab_bar_right_separator,
@@ -4101,27 +4092,6 @@ mod tests {
         assert_eq!(root_pane.tab_id, tab.tab_id);
         assert!(root_pane.terminal_id.starts_with("term_"));
         assert_ne!(root_pane.terminal_id, root_pane.pane_id);
-    }
-
-    #[test]
-    fn tab_create_response_includes_root_pane() {
-        let mut app = test_app();
-        let mut workspace = Workspace::test_new("api-tab-root-pane");
-        workspace.test_add_tab(None);
-        app.state.workspaces = vec![workspace];
-        app.state.ensure_test_terminals();
-        app.state.active = Some(0);
-        app.state.selected = 0;
-
-        let crate::api::schema::ResponseResult::TabCreated { tab, root_pane } =
-            app.tab_created_result(0, 1).unwrap()
-        else {
-            panic!("expected tab_created response");
-        };
-
-        assert_eq!(tab.workspace_id, root_pane.workspace_id);
-        assert_eq!(root_pane.tab_id, tab.tab_id);
-        assert_eq!(tab.pane_count, 1);
     }
 
     #[test]

@@ -1,23 +1,21 @@
 use std::collections::HashMap;
 
-use crate::detect::{Agent, AgentState};
+use crate::detect::AgentState;
 use crate::layout::PaneId;
 use crate::terminal::{TerminalId, TerminalState};
 
 use super::{Tab, Workspace};
 
-/// Detail info for a single pane, used by the agent detail panel.
+/// Agent-list data for a single pane.
+///
+/// This intentionally contains only the data shared by mobile agent rendering
+/// and agent-view filtering/sorting.
 pub struct PaneDetail {
     pub pane_id: PaneId,
     pub tab_idx: usize,
     pub tab_label: String,
-    pub label: String,
-    pub pane_label: Option<String>,
-    pub terminal_title: Option<String>,
-    pub terminal_title_stripped: Option<String>,
     pub agent_label: String,
     pub agent_kind_label: Option<String>,
-    pub agent: Option<Agent>,
     pub state: AgentState,
     pub seen: bool,
     pub last_agent_state_change_seq: Option<u64>,
@@ -52,15 +50,8 @@ impl Tab {
                     pane_id: *id,
                     tab_idx,
                     tab_label: tab_label.to_string(),
-                    label: agent_label.clone(),
-                    pane_label: terminal
-                        .effective_title()
-                        .or_else(|| terminal.manual_label.clone()),
-                    terminal_title: terminal.terminal_title.clone(),
-                    terminal_title_stripped: terminal.terminal_title_stripped(),
                     agent_label,
                     agent_kind_label,
-                    agent: terminal.effective_known_agent(),
                     state: terminal.state,
                     seen: pane.seen,
                     last_agent_state_change_seq: terminal.last_agent_state_change_seq,
@@ -100,7 +91,6 @@ impl Workspace {
     }
 
     pub fn pane_details(&self, terminals: &HashMap<TerminalId, TerminalState>) -> Vec<PaneDetail> {
-        let multi_tab = self.tabs.len() > 1;
         self.tabs
             .iter()
             .enumerate()
@@ -109,12 +99,6 @@ impl Workspace {
                     .tab_display_name(tab_idx)
                     .unwrap_or_else(|| (tab_idx + 1).to_string());
                 tab.pane_details(terminals, tab_idx, &tab_label).into_iter()
-            })
-            .map(|mut detail| {
-                if multi_tab {
-                    detail.label = format!("{}·{}", detail.tab_label, detail.agent_label);
-                }
-                detail
             })
             .collect()
     }
@@ -194,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_details_prefers_agent_name_over_detected_agent_label() {
+    fn pane_details_keep_display_and_kind_agent_labels_distinct() {
         let ws = Workspace::test_new("test");
         let root_pane = ws.tabs[0].root_pane;
         let mut terminals = HashMap::new();
@@ -206,20 +190,19 @@ mod tests {
         let labels: Vec<_> = ws
             .pane_details(&terminals)
             .into_iter()
-            .map(|detail| (detail.label, detail.agent_label, detail.agent))
+            .map(|detail| (detail.agent_label, detail.agent_kind_label))
             .collect();
 
-        assert_eq!(
-            labels,
-            vec![("planner".into(), "planner".into(), Some(Agent::Pi))]
-        );
+        assert_eq!(labels, vec![("planner".into(), Some("pi".into()))]);
     }
 
     #[test]
-    fn pane_details_includes_tab_context_for_multi_tab_workspace() {
+    fn pane_details_keep_tab_context_for_legacy_multi_tab_workspaces() {
         let mut ws = Workspace::test_new("test");
         ws.tabs[0].custom_name = Some("main".into());
         let root_pane = ws.tabs[0].root_pane;
+        // Legacy snapshots may contain several tabs even though desktop no
+        // longer creates them.
         let second_tab = ws.test_add_tab(Some("review"));
         let review_pane = ws.tabs[second_tab].root_pane;
         let mut terminals = HashMap::new();
@@ -245,21 +228,29 @@ mod tests {
         let labels: Vec<_> = ws
             .pane_details(&terminals)
             .into_iter()
-            .map(|detail| (detail.label, detail.agent_label, detail.agent))
+            .map(|detail| {
+                (
+                    detail.tab_label,
+                    detail.agent_label,
+                    detail.agent_kind_label,
+                )
+            })
             .collect();
 
         assert_eq!(
             labels,
             vec![
-                ("main·pi".into(), "pi".into(), Some(Agent::Pi)),
-                ("review·claude".into(), "claude".into(), Some(Agent::Claude)),
+                ("main".into(), "pi".into(), Some("pi".into())),
+                ("review".into(), "claude".into(), Some("claude".into())),
             ]
         );
     }
 
     #[test]
-    fn pane_details_use_tab_vector_index_not_stable_public_tab_number() {
+    fn pane_details_keep_legacy_tab_vector_indices_for_agent_view_sorting() {
         let mut ws = Workspace::test_new("test");
+        // Legacy snapshots may retain a sparse sequence of public tab
+        // numbers; agent-view sorting still addresses the vector index.
         let removed_tab = ws.test_add_tab(Some("removed"));
         let survivor_tab = ws.test_add_tab(Some("survivor"));
         let survivor_pane = ws.tabs[survivor_tab].root_pane;

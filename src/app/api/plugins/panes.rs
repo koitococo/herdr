@@ -167,68 +167,6 @@ impl App {
         )
     }
 
-    pub(super) fn open_plugin_tab(
-        &mut self,
-        id: String,
-        params: PluginPaneOpenParams,
-        plugin: &InstalledPluginInfo,
-        pane: PluginManifestPane,
-    ) -> String {
-        let ws_idx = match params.workspace_id.as_deref() {
-            Some(workspace_id) => match self.parse_workspace_id(workspace_id) {
-                Some(ws_idx) => ws_idx,
-                None => return encode_error(id, "workspace_not_found", "workspace not found"),
-            },
-            None => match self.state.active {
-                Some(ws_idx) => ws_idx,
-                None => return encode_error(id, "no_active_workspace", "no active workspace"),
-            },
-        };
-        let cwd = self.plugin_pane_cwd(plugin, params.cwd);
-        let context = self.plugin_context_for_workspace(ws_idx, "plugin-pane");
-        let extra_env =
-            match self.plugin_pane_launch_env(plugin, &pane.id, params.env.clone(), &context) {
-                Ok(env) => env,
-                Err((code, message)) => return encode_error(id, &code, message),
-            };
-        let (rows, cols) = self.state.estimate_pane_size();
-        let Some(ws) = self.state.workspaces.get_mut(ws_idx) else {
-            return encode_error(id, "workspace_not_found", "workspace not found");
-        };
-        let (tab_idx, terminal, runtime) = match ws.create_tab_argv_command(
-            rows.max(4),
-            cols.max(10),
-            cwd,
-            &pane.command,
-            extra_env,
-            self.state.pane_scrollback_limit_bytes,
-            self.state.host_terminal_theme,
-            self.state.host_terminal_appearance,
-        ) {
-            Ok(result) => result,
-            Err(err) => return encode_error(id, "plugin_pane_open_failed", err.to_string()),
-        };
-        let pane_id = ws.tabs[tab_idx].root_pane;
-        if params.focus {
-            self.state.switch_workspace_tab(ws_idx, tab_idx);
-            self.state.mode = crate::app::Mode::Terminal;
-        }
-        let new_pane = crate::workspace::NewPane {
-            pane_id,
-            terminal,
-            runtime,
-        };
-        self.finish_plugin_pane_open(
-            id,
-            ws_idx,
-            Some(tab_idx),
-            Some(tab_idx),
-            new_pane,
-            plugin.plugin_id.clone(),
-            pane,
-        )
-    }
-
     fn plugin_pane_launch_env(
         &self,
         plugin: &InstalledPluginInfo,

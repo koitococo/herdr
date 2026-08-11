@@ -1051,7 +1051,7 @@ fn agent_commands_work() {
 }
 
 #[test]
-fn agent_wait_returns_immediately_for_unseen_done_agent() {
+fn agent_wait_returns_immediately_for_done_agent_outside_focused_pane() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
@@ -1067,18 +1067,18 @@ fn agent_wait_returns_immediately_for_unseen_done_agent() {
         .as_str()
         .unwrap()
         .to_string();
-    let workspace_id = created["result"]["workspace"]["workspace_id"]
+    let other_workspace = run_cli_json(
+        &socket_path,
+        &["workspace", "create", "--cwd", base.to_str().unwrap()],
+    );
+    let other_workspace_id = other_workspace["result"]["workspace"]["workspace_id"]
         .as_str()
         .unwrap();
-    let second_tab = run_cli_json(
-        &socket_path,
-        &["tab", "create", "--workspace", workspace_id],
+    assert!(
+        run_cli(&socket_path, &["workspace", "focus", other_workspace_id])
+            .status
+            .success()
     );
-    let second_tab_id = second_tab["result"]["tab"]["tab_id"].as_str().unwrap();
-    assert_ne!(second_tab_id, "w1:t1");
-    assert!(run_cli(&socket_path, &["tab", "focus", second_tab_id])
-        .status
-        .success());
     assert!(run_cli(
         &socket_path,
         &[

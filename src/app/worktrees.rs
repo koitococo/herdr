@@ -1112,26 +1112,6 @@ mod tests {
         shutdown_test_runtimes(&mut app);
     }
 
-    #[tokio::test]
-    async fn ui_create_tab_emits_tab_and_pane_events() {
-        let event_hub = crate::api::EventHub::default();
-        let mut app = app_for_worktree_tests_with_event_hub(event_hub.clone());
-        app.create_workspace_with_options(std::env::temp_dir(), true)
-            .unwrap();
-
-        app.create_tab();
-
-        assert_eq!(
-            event_kinds(&event_hub),
-            vec![
-                crate::api::schema::EventKind::TabCreated,
-                crate::api::schema::EventKind::PaneCreated,
-                crate::api::schema::EventKind::LayoutUpdated,
-            ]
-        );
-        shutdown_test_runtimes(&mut app);
-    }
-
     #[test]
     fn worktree_create_replaces_prefilled_branch_on_paste_and_syncs_state() {
         let mut app = app_for_worktree_tests();

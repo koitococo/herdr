@@ -24,7 +24,6 @@ enum WheelRouting {
 }
 
 const WORKSPACE_DRAG_THRESHOLD: u16 = 1;
-const TAB_DRAG_THRESHOLD: u16 = 1;
 
 fn modified_url_click_modifier() -> KeyModifiers {
     KeyModifiers::CONTROL
@@ -431,11 +430,6 @@ impl App {
                     MouseAction::MoveWorkspaceBlock { params } => {
                         self.move_workspace_block_via_api(params)
                     }
-                    MouseAction::MoveTab {
-                        ws_idx,
-                        source_tab_idx,
-                        insert_idx,
-                    } => self.move_tab_via_api(ws_idx, source_tab_idx, insert_idx),
                     MouseAction::SetSplitRatio { path, ratio } => {
                         self.set_split_ratio_via_api(path, ratio)
                     }

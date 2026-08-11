@@ -1,6 +1,4 @@
-use crate::config::{
-    Keybinds, NewTerminalCwdConfig, SoundConfig, TabBarPositionConfig, ToastConfig, ToastDelivery,
-};
+use crate::config::{Keybinds, NewTerminalCwdConfig, SoundConfig, ToastConfig, ToastDelivery};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Direction, Rect};
 use ratatui::style::Color;
@@ -809,11 +807,6 @@ pub struct ViewState {
     pub layout: ViewLayout,
     pub sidebar_rect: Rect,
     pub workspace_card_areas: Vec<WorkspaceCardArea>,
-    pub tab_bar_rect: Rect,
-    pub tab_hit_areas: Vec<Rect>,
-    pub tab_scroll_left_hit_area: Rect,
-    pub tab_scroll_right_hit_area: Rect,
-    pub new_tab_hit_area: Rect,
     pub terminal_area: Rect,
     pub mobile_header_rect: Rect,
     pub mobile_menu_hit_area: Rect,
@@ -1139,16 +1132,7 @@ pub(crate) enum DragTarget {
         source_ws_idx: usize,
         drop_target: Option<WorkspaceDropTarget>,
     },
-    TabReorder {
-        source_id: crate::app::InputSourceId,
-        ws_idx: usize,
-        source_tab_idx: usize,
-        insert_idx: Option<usize>,
-    },
     WorkspaceListScrollbar {
-        grab_row_offset: u16,
-    },
-    AgentPanelScrollbar {
         grab_row_offset: u16,
     },
     PaneSplit {
@@ -1171,7 +1155,6 @@ pub(crate) enum DragTarget {
         grab_row_offset: u16,
     },
     SidebarDivider,
-    SidebarSectionDivider,
 }
 
 /// Active mouse drag on a split border or sidebar divider.
@@ -1181,13 +1164,6 @@ pub(crate) struct DragState {
 
 pub(crate) struct WorkspacePressState {
     pub ws_idx: usize,
-    pub start_col: u16,
-    pub start_row: u16,
-}
-
-pub(crate) struct TabPressState {
-    pub ws_idx: usize,
-    pub tab_idx: usize,
     pub start_col: u16,
     pub start_row: u16,
 }
@@ -1202,10 +1178,6 @@ pub enum ContextMenuKind {
         is_linked_worktree: bool,
         has_worktree_children: bool,
         collapsed: bool,
-    },
-    Tab {
-        ws_idx: usize,
-        tab_idx: usize,
     },
     Pane {
         ws_idx: usize,
@@ -1250,7 +1222,6 @@ impl ContextMenuState {
                 "Open worktree...",
                 if collapsed { "Expand" } else { "Collapse" },
             ],
-            ContextMenuKind::Tab { .. } => vec!["New tab", "Rename", "Close"],
             ContextMenuKind::Pane {
                 source_pane_id,
                 has_manual_label,
@@ -1424,15 +1395,14 @@ pub struct AppState {
     pub copy_mode: Option<CopyModeState>,
     pub workspace_scroll: usize,
     pub agent_panel_scroll: usize,
+    /// Per-client legacy tab-strip offset retained for headless client state.
     pub tab_scroll: usize,
-    pub tab_scroll_follow_active: bool,
     pub mobile_switcher_scroll: usize,
     // View geometry (computed before render, consumed by render + mouse)
     pub view: ViewState,
     pub(crate) drag: Option<DragState>,
     pub(crate) workspace_presses:
         std::collections::HashMap<crate::app::InputSourceId, WorkspacePressState>,
-    pub(crate) tab_presses: std::collections::HashMap<crate::app::InputSourceId, TabPressState>,
     pub selection: Option<Selection>,
     pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub context_menu: Option<ContextMenuState>,
@@ -1487,8 +1457,6 @@ pub struct AppState {
     pub pane_scrollbars: bool,
     pub pane_gaps: bool,
     pub show_agent_labels_on_pane_borders: bool,
-    pub hide_tab_bar_when_single_tab: bool,
-    pub tab_bar_position: TabBarPositionConfig,
     pub tab_bar_right: Vec<TabBarStatusSegment>,
     pub tab_bar_right_separator: String,
     pub pane_history_persistence: bool,
@@ -1809,17 +1777,11 @@ impl AppState {
             workspace_scroll: 0,
             agent_panel_scroll: 0,
             tab_scroll: 0,
-            tab_scroll_follow_active: true,
             mobile_switcher_scroll: 0,
             view: ViewState {
                 layout: ViewLayout::Desktop,
                 sidebar_rect: Rect::default(),
                 workspace_card_areas: Vec::new(),
-                tab_bar_rect: Rect::default(),
-                tab_hit_areas: Vec::new(),
-                tab_scroll_left_hit_area: Rect::default(),
-                tab_scroll_right_hit_area: Rect::default(),
-                new_tab_hit_area: Rect::default(),
                 terminal_area: Rect::default(),
                 mobile_header_rect: Rect::default(),
                 mobile_menu_hit_area: Rect::default(),
@@ -1829,7 +1791,6 @@ impl AppState {
             },
             drag: None,
             workspace_presses: std::collections::HashMap::new(),
-            tab_presses: std::collections::HashMap::new(),
             selection: None,
             selection_autoscroll: None,
             context_menu: None,
@@ -1878,8 +1839,6 @@ impl AppState {
             pane_scrollbars: true,
             pane_gaps: false,
             show_agent_labels_on_pane_borders: false,
-            hide_tab_bar_when_single_tab: false,
-            tab_bar_position: TabBarPositionConfig::Top,
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: " ".into(),
             pane_history_persistence: false,
@@ -2031,10 +1990,6 @@ impl AppState {
             assert!(
                 self.workspace_presses.is_empty(),
                 "empty app state must not keep workspace press state"
-            );
-            assert!(
-                self.tab_presses.is_empty(),
-                "empty app state must not keep tab press state"
             );
             assert!(
                 self.context_menu.is_none(),
@@ -2207,23 +2162,6 @@ impl AppState {
                         assert_workspace_index(*ws_idx, "workspace drag target");
                     }
                 }
-                DragTarget::TabReorder {
-                    ws_idx,
-                    source_tab_idx,
-                    insert_idx,
-                    ..
-                } => {
-                    assert_tab_index(*ws_idx, *source_tab_idx, "tab drag source");
-                    if let Some(insert_idx) = insert_idx {
-                        assert!(
-                            *insert_idx <= self.workspaces[*ws_idx].tabs.len(),
-                            "tab drag insert index {} out of bounds for workspace {} with {} tabs",
-                            insert_idx,
-                            ws_idx,
-                            self.workspaces[*ws_idx].tabs.len()
-                        );
-                    }
-                }
                 DragTarget::PaneScrollbar { pane_id, .. } => {
                     assert_live_pane(*pane_id, "pane scrollbar drag")
                 }
@@ -2233,17 +2171,12 @@ impl AppState {
         for press in self.workspace_presses.values() {
             assert_workspace_index(press.ws_idx, "workspace press");
         }
-        for press in self.tab_presses.values() {
-            assert_tab_index(press.ws_idx, press.tab_idx, "tab press");
-        }
+
         if let Some(menu) = &self.context_menu {
             match menu.kind {
                 ContextMenuKind::Workspace { ws_idx }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. } => {
                     assert_workspace_index(ws_idx, "context menu workspace")
-                }
-                ContextMenuKind::Tab { ws_idx, tab_idx } => {
-                    assert_tab_index(ws_idx, tab_idx, "context menu tab")
                 }
                 ContextMenuKind::Pane {
                     ws_idx,

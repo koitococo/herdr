@@ -296,15 +296,14 @@ mod tests {
 
         assert_eq!((frame.width, frame.height), (106, 20));
         assert_eq!(app.view.sidebar_rect, Rect::new(0, 0, 26, 20));
-        assert_eq!(app.view.tab_bar_rect, Rect::new(26, 0, 80, 1));
-        assert_eq!(app.view.terminal_area, Rect::new(26, 1, 80, 19));
+        assert_eq!(app.view.terminal_area, Rect::new(26, 0, 80, 20));
         assert_eq!(app.view.pane_infos.len(), 2);
         assert!(!app.view.split_borders.is_empty());
         assert!(frame.cursor.is_some());
         assert_eq!(frame.hyperlinks, vec![uri.to_owned()]);
         assert_eq!(
             frame_digest(&frame),
-            "a7c21fa42305a41231c7ae254f264f6ef923f46301d8fc4cd35ab6dfdd651b6b"
+            "5c654479c865903615c3ff649e286362bffae2a1937bbfaaf003fc6d6a13883e"
         );
     }
 

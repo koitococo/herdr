@@ -622,7 +622,7 @@ fn worktree_cli_rejects_local_argument_errors_before_socket_use() {
 }
 
 #[test]
-fn tab_management_commands_work() {
+fn tab_read_commands_remain_available_and_mutations_are_rejected() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
@@ -641,50 +641,40 @@ fn tab_management_commands_work() {
         .as_str()
         .unwrap()
         .to_string();
-    let first_tab_id = created_json["result"]["workspace"]["active_tab_id"]
+    let tab_id = created_json["result"]["workspace"]["active_tab_id"]
         .as_str()
         .unwrap()
         .to_string();
-
-    let created_tab = run_cli(
-        &socket_path,
-        &["tab", "create", "--workspace", &workspace_id],
-    );
-    assert!(created_tab.status.success());
-    let created_tab_json: serde_json::Value = serde_json::from_slice(&created_tab.stdout).unwrap();
-    let second_tab_id = created_tab_json["result"]["tab"]["tab_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert_eq!(second_tab_id, format!("{workspace_id}:t2"));
 
     let listed_tabs = run_cli(&socket_path, &["tab", "list", "--workspace", &workspace_id]);
     assert!(listed_tabs.status.success());
     let listed_tabs_json: serde_json::Value = serde_json::from_slice(&listed_tabs.stdout).unwrap();
     assert_eq!(
         listed_tabs_json["result"]["tabs"].as_array().unwrap().len(),
-        2
+        1
     );
 
-    let renamed_tab = run_cli(&socket_path, &["tab", "rename", &second_tab_id, "logs"]);
-    assert!(renamed_tab.status.success());
-    let renamed_tab_json: serde_json::Value = serde_json::from_slice(&renamed_tab.stdout).unwrap();
-    assert_eq!(renamed_tab_json["result"]["tab"]["label"], "logs");
-
-    let focused_tab = run_cli(&socket_path, &["tab", "focus", &first_tab_id]);
-    assert!(focused_tab.status.success());
-    let focused_tab_json: serde_json::Value = serde_json::from_slice(&focused_tab.stdout).unwrap();
-    assert_eq!(focused_tab_json["result"]["tab"]["tab_id"], first_tab_id);
-
-    let tab_get = run_cli(&socket_path, &["tab", "get", &second_tab_id]);
+    let tab_get = run_cli(&socket_path, &["tab", "get", &tab_id]);
     assert!(tab_get.status.success());
     let tab_get_json: serde_json::Value = serde_json::from_slice(&tab_get.stdout).unwrap();
-    assert_eq!(tab_get_json["result"]["tab"]["tab_id"], second_tab_id);
+    assert_eq!(tab_get_json["result"]["tab"]["tab_id"], tab_id);
 
-    let closed_tab = run_cli(&socket_path, &["tab", "close", &second_tab_id]);
-    assert!(closed_tab.status.success());
-    let closed_tab_json: serde_json::Value = serde_json::from_slice(&closed_tab.stdout).unwrap();
-    assert_eq!(closed_tab_json["result"]["type"], "ok");
+    let focused_tab = run_cli(&socket_path, &["tab", "focus", &tab_id]);
+    assert!(focused_tab.status.success());
+
+    for args in [
+        vec!["tab", "create", "--workspace", workspace_id.as_str()],
+        vec!["tab", "rename", tab_id.as_str(), "logs"],
+        vec!["tab", "close", tab_id.as_str()],
+    ] {
+        let result = run_cli(&socket_path, &args);
+        assert!(!result.status.success());
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("multi_tab_unsupported"),
+            "stderr: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
 
     cleanup_spawned_herdr(herdr, base);
 }

@@ -112,32 +112,7 @@ fn agent_wait_exits_when_done_status_matches() {
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
-    let bin_dir = base.join("bin");
-
-    fs::create_dir_all(&bin_dir).unwrap();
-    let fake_pi = bin_dir.join("pi");
-    fs::write(
-        &fake_pi,
-        "#!/bin/sh\nprintf 'starting\\n'\nsleep 4\nprintf 'Working...\\n'\nsleep 1\nprintf '\\033[2J\\033[Hdone\\n'\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fake_pi, perms).unwrap();
-    }
-
-    let inherited_path = std::env::var("PATH").unwrap_or_default();
-    let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
-    let herdr = spawn_herdr_with_path(
-        &config_home,
-        &runtime_dir,
-        &socket_path,
-        Some(Path::new(&path_override)),
-    );
-
+    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = send_request(
@@ -147,33 +122,31 @@ fn agent_wait_exits_when_done_status_matches() {
             base.display()
         ),
     );
-    let workspace_id = created["result"]["workspace"]["workspace_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let tab_created = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_cli_status_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
-            workspace_id
-        ),
-    );
-    assert_eq!(tab_created["result"]["type"], "tab_created");
-
     let pane_id = created["result"]["root_pane"]["pane_id"]
         .as_str()
         .unwrap()
         .to_string();
-    let start_pi = run_cli(&socket_path, &["pane", "run", &pane_id, "pi"]);
-    assert!(start_pi.status.success());
-    assert!(wait_until(
-        Duration::from_secs(3),
-        Duration::from_millis(25),
-        || run_cli(&socket_path, &["agent", "get", &pane_id])
-            .status
-            .success()
-    ));
+    let background = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"req_cli_status_background","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            base.display()
+        ),
+    );
+    assert_ne!(
+        background["result"]["workspace"]["workspace_id"],
+        created["result"]["workspace"]["workspace_id"]
+    );
+
+    for state in ["working", "idle"] {
+        let reported = send_request(
+            &socket_path,
+            &format!(
+                r#"{{"id":"req_cli_status_{state}","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","source":"custom:test","agent":"pi","state":"{state}"}}}}"#
+            ),
+        );
+        assert_eq!(reported["result"]["type"], "ok");
+    }
 
     let waited = run_cli(
         &socket_path,

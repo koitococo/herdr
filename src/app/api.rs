@@ -10,6 +10,7 @@ mod panes;
 pub(crate) mod plugins;
 mod responses;
 mod session;
+mod tab_policy;
 mod tabs;
 mod workspaces;
 mod worktrees;
@@ -1896,21 +1897,25 @@ mod tests {
     }
 
     #[test]
-    fn overlay_exit_preserves_focus_changed_before_exit() {
+    fn overlay_exit_preserves_focus_when_workspace_changed_before_exit() {
         let mut workspace = crate::workspace::Workspace::test_new("overlay");
         let previous_focus = workspace.tabs[0].root_pane;
         let overlay_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
         workspace.tabs[0].zoomed = true;
-        let new_tab = workspace.test_add_tab(Some("new"));
-        workspace.switch_tab(new_tab);
         let mut app = app_with_overlay(workspace, overlay_pane, previous_focus, true);
+        app.state
+            .workspaces
+            .push(crate::workspace::Workspace::test_new("background"));
+        app.state.ensure_test_terminals();
+        app.state.active = Some(1);
+        app.state.selected = 1;
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: overlay_pane,
         });
 
         let overlay_tab = &app.state.workspaces[0].tabs[0];
-        assert_eq!(app.state.workspaces[0].active_tab, new_tab);
+        assert_eq!(app.state.active, Some(1));
         assert_eq!(overlay_tab.layout.focused(), previous_focus);
         assert!(overlay_tab.zoomed);
         assert!(app.overlay_panes.is_empty());

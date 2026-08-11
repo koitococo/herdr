@@ -7,15 +7,15 @@ Herdr is a terminal workspace manager. It keeps real terminal processes running 
 
 ## Workspace
 
-A workspace is the top-level project container. Use one workspace per repo, task, or investigation.
-
-A workspace owns tabs and panes. Its sidebar state rolls up from the agents inside it, so you can see which project needs attention.
+A workspace is the top-level project container. Use one workspace per repo, task, or investigation. Its desktop sidebar state rolls up from the agents inside it, so you can see which project needs attention.
 
 ## Tab
 
-A tab is a layout inside a workspace. Use tabs to separate views like `agents`, `logs`, `server`, or `review`.
-
-Tabs are addressable from the CLI and socket API.
+A tab remains a runtime and protocol identity for a layout inside a workspace.
+The desktop UI no longer has a tab bar, and this release does not offer
+multi-tab desktop management. `tab.list` and `tab.get` can inspect tab records,
+including those restored from legacy snapshots, while tab mutations are rejected
+with `multi_tab_unsupported`. The protocol and snapshot format are not migrated.
 
 ## Pane
 
@@ -23,9 +23,7 @@ A pane is a real terminal. Herdr renders the terminal output, sends input back t
 
 Panes can be split right or down. They can be renamed manually, read from the CLI, sent input, and closed.
 
-## Mouse UI
-
-Herdr is mouse-native. You can click panes, tabs, workspaces, and agents. You can drag split borders, select text, and use right-click menus. Everything below is also reachable by mouse; keyboard bindings are an optional layer.
+Herdr is mouse-native. You can click panes, workspaces, and agents. You can drag split borders, select text, and use right-click menus. Everything below is also reachable by mouse; keyboard bindings are an optional layer. The desktop sidebar shows Spaces only; the mobile UI is unchanged by this release.
 
 If you prefer keyboard-only control, or you want Herdr to stop capturing mouse input, disable mouse capture:
 
@@ -82,4 +80,4 @@ Herdr has terminal mode, prefix mode, and navigate mode.
 
 Terminal mode sends keys to the focused pane. Prefix mode waits for one Herdr action after the prefix key. Navigate mode is the persistent workspace navigation surface.
 
-Press the prefix key, default `ctrl+b`, then an action key such as `c` for a new tab or `w` for workspace navigation. See [Keyboard](/docs/keyboard/) if the prefix idea is new to you.
+Press the prefix key, default `ctrl+b`, then an action key such as `w` for workspace navigation. See [Keyboard](/docs/keyboard/) if the prefix idea is new to you.

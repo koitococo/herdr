@@ -18,7 +18,6 @@ mod settings;
 mod sidebar;
 mod status;
 mod tab_surface;
-mod tabs;
 mod text;
 mod widgets;
 
@@ -62,7 +61,6 @@ use self::status::{
 pub(crate) use self::tab_surface::{
     compute_tab_surface, render_tab_surface, resize_tab_surface, TabSurfaceLayout,
 };
-use self::tabs::render_tab_bar;
 pub(crate) use self::{
     dialogs::{
         confirm_close_button_rects, confirm_close_popup_rect, new_linked_worktree_button_rects,
@@ -76,15 +74,12 @@ pub(crate) use self::{
         SETTINGS_POPUP_WIDTH,
     },
     sidebar::{
-        agent_entry_gap, agent_entry_height_in_body, agent_panel_body_rect, agent_panel_entries,
-        agent_panel_scroll_for_target, agent_panel_scroll_metrics, agent_panel_scrollbar_rect,
-        agent_panel_toggle_rect, all_agent_panel_entries, collapsed_sidebar_sections,
-        collapsed_sidebar_toggle_rect, compute_workspace_card_areas, expanded_sidebar_sections,
-        expanded_sidebar_toggle_rect, normalized_workspace_scroll, sidebar_section_divider_rect,
-        workspace_drop_slots, workspace_group_chevron_rect, workspace_list_entries,
-        workspace_list_entries_expanded, workspace_list_rect, workspace_list_scroll_metrics,
-        workspace_list_scrollbar_rect, workspace_parent_group_state, AgentPanelEntry,
-        WorkspaceListEntry,
+        agent_panel_entries, all_agent_panel_entries, collapsed_sidebar_toggle_rect,
+        collapsed_workspace_list_rect, compute_workspace_card_areas, expanded_sidebar_toggle_rect,
+        normalized_workspace_scroll, workspace_drop_slots, workspace_group_chevron_rect,
+        workspace_list_entries, workspace_list_entries_expanded, workspace_list_rect,
+        workspace_list_scroll_metrics, workspace_list_scrollbar_rect, workspace_parent_group_state,
+        AgentPanelEntry, WorkspaceListEntry,
     },
 };
 
@@ -96,7 +91,6 @@ pub(crate) use self::{
     },
     panes::{apply_pane_chrome, pane_inner_rect, pane_is_scrolled_back},
     tab_surface::{tab_surface_cursor, tab_surface_hyperlinks, TabSurfaceView},
-    tabs::{compute_tab_bar_view, tab_bar_content_area},
     widgets::{centered_popup_rect, modal_stack_areas},
 };
 use crate::app::state::ViewLayout;
@@ -178,37 +172,13 @@ fn resize_background_tab_panes_for_desktop(
     cell_size: crate::kitty_graphics::HostCellSize,
 ) {
     for (ws_idx, ws) in app.workspaces.iter().enumerate() {
-        let (_, terminal_area) = desktop_tab_bar_and_terminal_area(app, ws, main_area);
+        let terminal_area = main_area;
         for (tab_idx, tab) in ws.tabs.iter().enumerate() {
             if app.active == Some(ws_idx) && tab_idx == ws.active_tab_index() {
                 continue;
             }
             resize_tab_surface(app, terminal_runtimes, tab, terminal_area, cell_size);
         }
-    }
-}
-
-fn desktop_tab_bar_and_terminal_area(
-    app: &AppState,
-    ws: &crate::workspace::Workspace,
-    main_area: Rect,
-) -> (Rect, Rect) {
-    let hide_single_tab_bar = app.hide_tab_bar_when_single_tab && ws.tabs.len() == 1;
-    if !hide_single_tab_bar && main_area.height > 1 {
-        match app.tab_bar_position {
-            crate::config::TabBarPositionConfig::Top => {
-                let [tab_bar_rect, terminal_area] =
-                    Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(main_area);
-                (tab_bar_rect, terminal_area)
-            }
-            crate::config::TabBarPositionConfig::Bottom => {
-                let [terminal_area, tab_bar_rect] =
-                    Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(main_area);
-                (tab_bar_rect, terminal_area)
-            }
-        }
-    } else {
-        (Rect::default(), main_area)
     }
 }
 
@@ -237,22 +207,14 @@ fn compute_view_internal(
     let [sidebar_area, main_area] =
         Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(1)]).areas(area);
 
-    let (tab_bar_rect, terminal_area) = app
-        .active
-        .and_then(|i| app.workspaces.get(i))
-        .map(|ws| desktop_tab_bar_and_terminal_area(app, ws, main_area))
-        .unwrap_or((Rect::default(), main_area));
+    let terminal_area = main_area;
 
     if !app.sidebar_collapsed {
         app.workspace_scroll = normalized_workspace_scroll(app, sidebar_area, app.workspace_scroll);
-        let (_, detail_area) = expanded_sidebar_sections(sidebar_area, app.sidebar_section_split);
-        let max_agent_scroll = agent_panel_scroll_metrics(app, detail_area).max_offset_from_bottom;
-        app.agent_panel_scroll = app.agent_panel_scroll.min(max_agent_scroll);
     } else {
         app.workspace_scroll = app
             .workspace_scroll
             .min(app.workspaces.len().saturating_sub(1));
-        app.agent_panel_scroll = 0;
     }
 
     let workspace_card_areas = if app.sidebar_collapsed {
@@ -260,21 +222,6 @@ fn compute_view_internal(
     } else {
         compute_workspace_card_areas(app, sidebar_area)
     };
-
-    let tab_bar_view = app
-        .active
-        .and_then(|ws_idx| app.workspaces.get(ws_idx))
-        .map(|ws| {
-            compute_tab_bar_view(
-                ws,
-                tab_bar_content_area(app, tab_bar_rect),
-                app.tab_scroll,
-                app.tab_scroll_follow_active,
-                app.mouse_capture,
-            )
-        })
-        .unwrap_or_default();
-    app.tab_scroll = tab_bar_view.scroll;
 
     let TabSurfaceLayout {
         pane_infos,
@@ -308,11 +255,6 @@ fn compute_view_internal(
         layout: ViewLayout::Desktop,
         sidebar_rect: sidebar_area,
         workspace_card_areas,
-        tab_bar_rect,
-        tab_hit_areas: tab_bar_view.tab_hit_areas,
-        tab_scroll_left_hit_area: tab_bar_view.scroll_left_hit_area,
-        tab_scroll_right_hit_area: tab_bar_view.scroll_right_hit_area,
-        new_tab_hit_area: tab_bar_view.new_tab_hit_area,
         terminal_area,
         mobile_header_rect: Rect::default(),
         mobile_menu_hit_area: Rect::default(),
@@ -371,11 +313,6 @@ fn compute_mobile_view(
         layout: ViewLayout::Mobile,
         sidebar_rect: Rect::default(),
         workspace_card_areas: Vec::new(),
-        tab_bar_rect: Rect::default(),
-        tab_hit_areas: Vec::new(),
-        tab_scroll_left_hit_area: Rect::default(),
-        tab_scroll_right_hit_area: Rect::default(),
-        new_tab_hit_area: Rect::default(),
         terminal_area,
         mobile_header_rect: header_rect,
         mobile_menu_hit_area: header_hits.menu,
@@ -398,13 +335,7 @@ pub fn render_with_runtime_registry(
     terminal_runtimes: &TerminalRuntimeRegistry,
     frame: &mut Frame,
 ) {
-    let tab_bar_area = app.view.tab_bar_rect;
     let terminal_area = app.view.terminal_area;
-
-    render_navigation_chrome(app, terminal_runtimes, frame);
-    if app.view.layout != ViewLayout::Mobile {
-        render_tab_bar(app, frame, tab_bar_area);
-    }
     if app
         .active
         .and_then(|ws_idx| app.workspaces.get(ws_idx))
@@ -415,18 +346,13 @@ pub fn render_with_runtime_registry(
         render_empty(app, frame, terminal_area);
     }
 
+    render_navigation_chrome(app, terminal_runtimes, frame);
+
     // Ambient notifications sit above panes, but below interactive overlays.
     render_notifications(app, frame, terminal_area);
     render_popup_pane(app, terminal_runtimes, frame, terminal_area);
 
-    let mode_bar_area = if app.view.layout == ViewLayout::Desktop
-        && app.tab_bar_position == crate::config::TabBarPositionConfig::Bottom
-        && tab_bar_area.height > 0
-    {
-        tab_bar_area
-    } else {
-        terminal_area
-    };
+    let mode_bar_area = terminal_area;
 
     match app.mode {
         Mode::Onboarding => render_onboarding_overlay(app, frame, frame.area()),
@@ -599,7 +525,6 @@ mod tests {
     use super::scrollbar::scrollbar_thumb;
     use super::*;
     use crate::{app::state::ViewLayout, layout::PaneInfo, workspace::Workspace};
-    use ratatui::style::Color;
     use ratatui::{backend::TestBackend, Terminal};
 
     #[test]
@@ -717,7 +642,6 @@ mod tests {
 
         assert_eq!(app.view.layout, ViewLayout::Mobile);
         assert_eq!(app.view.sidebar_rect, Rect::default());
-        assert_eq!(app.view.tab_bar_rect, Rect::default());
         assert_eq!(app.view.mobile_header_rect, Rect::new(0, 0, 44, 2));
         assert_eq!(app.view.terminal_area, Rect::new(0, 2, 44, 18));
         assert_eq!(app.view.mobile_menu_hit_area.height, 2);
@@ -812,80 +736,17 @@ mod tests {
     }
 
     #[test]
-    fn desktop_tab_bar_position_controls_geometry_and_mode_bar_placement() {
+    fn desktop_tab_chrome_is_empty_and_terminal_uses_full_main_area() {
         let mut app = crate::app::state::AppState::test_new();
-        app.workspaces = vec![Workspace::test_new("one")];
+        let mut workspace = Workspace::test_new("one");
+        workspace.test_add_tab(Some("legacy"));
+        app.workspaces = vec![workspace];
         app.active = Some(0);
         app.selected = 0;
         app.mode = Mode::Prefix;
 
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
-        assert_eq!(app.view.tab_bar_rect, Rect::new(26, 0, 54, 1));
-        assert_eq!(app.view.terminal_area, Rect::new(26, 1, 54, 19));
-
-        app.tab_bar_position = crate::config::TabBarPositionConfig::Bottom;
-        compute_view(&mut app, Rect::new(0, 0, 80, 20));
-        assert_eq!(app.view.terminal_area, Rect::new(26, 0, 54, 19));
-        assert_eq!(app.view.tab_bar_rect, Rect::new(26, 19, 54, 1));
-        assert!(app.view.tab_hit_areas.iter().all(|rect| rect.y == 19));
-        assert_eq!(app.view.new_tab_hit_area.y, 19);
-
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| render(&app, frame)).unwrap();
-        let mode_row = buffer_row_text(
-            terminal.backend().buffer(),
-            app.view.tab_bar_rect,
-            app.view.tab_bar_rect.y,
-        );
-        assert!(mode_row.contains("PREFIX"), "{mode_row}");
-    }
-
-    #[test]
-    fn hide_tab_bar_when_single_tab_toggles_geometry_with_tab_count() {
-        let mut app = crate::app::state::AppState::test_new();
-        app.hide_tab_bar_when_single_tab = true;
-        app.workspaces = vec![Workspace::test_new("one")];
-        app.active = Some(0);
-        app.selected = 0;
-        app.mode = Mode::Terminal;
-
-        compute_view(&mut app, Rect::new(0, 0, 80, 20));
-        let single_tab_terminal_area = app.view.terminal_area;
-        assert_eq!(app.view.tab_bar_rect, Rect::default());
-        assert_eq!(single_tab_terminal_area, Rect::new(26, 0, 54, 20));
-        assert!(app.view.tab_hit_areas.is_empty());
-        assert_eq!(app.view.new_tab_hit_area, Rect::default());
-
-        app.workspaces[0].test_add_tab(Some("logs"));
-        compute_view(&mut app, Rect::new(0, 0, 80, 20));
-
-        assert_eq!(app.view.tab_bar_rect, Rect::new(26, 0, 54, 1));
-        assert_eq!(app.view.terminal_area, Rect::new(26, 1, 54, 19));
-        assert_eq!(app.view.tab_hit_areas.len(), 2);
-        assert!(app.view.tab_hit_areas.iter().all(|rect| rect.width > 0));
-        assert!(app.view.new_tab_hit_area.width > 0);
-
-        assert!(app.workspaces[0].close_tab(1));
-        compute_view(&mut app, Rect::new(0, 0, 80, 20));
-
-        assert_eq!(app.view.terminal_area, single_tab_terminal_area);
-        assert_eq!(app.view.tab_bar_rect, Rect::default());
-        assert!(app.view.tab_hit_areas.is_empty());
-        assert_eq!(app.view.new_tab_hit_area, Rect::default());
-    }
-
-    #[test]
-    fn bottom_tab_bar_still_hides_when_single_tab() {
-        let mut app = crate::app::state::AppState::test_new();
-        app.hide_tab_bar_when_single_tab = true;
-        app.tab_bar_position = crate::config::TabBarPositionConfig::Bottom;
-        app.workspaces = vec![Workspace::test_new("one")];
-        app.active = Some(0);
-        app.selected = 0;
-        app.mode = Mode::Prefix;
-
-        compute_view(&mut app, Rect::new(0, 0, 80, 20));
-        assert_eq!(app.view.tab_bar_rect, Rect::default());
+        assert_eq!(app.view.layout, ViewLayout::Desktop);
         assert_eq!(app.view.terminal_area, Rect::new(26, 0, 54, 20));
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -899,37 +760,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hide_tab_bar_when_single_tab_resizes_background_tabs_per_workspace() {
+    async fn desktop_background_tabs_use_full_main_area() {
         let mut app = crate::app::state::AppState::test_new();
-        app.hide_tab_bar_when_single_tab = true;
 
         let mut one_tab_workspace = Workspace::test_new("one");
         let one_tab_pane = one_tab_workspace.tabs[0].root_pane;
-        let one_tab_runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(10, 5, b"");
-        one_tab_workspace.tabs[0]
-            .runtimes
-            .insert(one_tab_pane, one_tab_runtime);
+        one_tab_workspace.tabs[0].runtimes.insert(
+            one_tab_pane,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(10, 5, b""),
+        );
 
-        let mut two_tab_workspace = Workspace::test_new("two");
-        let background_tab = two_tab_workspace.test_add_tab(Some("logs"));
-        let two_tab_pane = two_tab_workspace.tabs[background_tab].root_pane;
-        let two_tab_runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(10, 5, b"");
-        two_tab_workspace.tabs[background_tab]
-            .runtimes
-            .insert(two_tab_pane, two_tab_runtime);
+        let mut legacy_workspace = Workspace::test_new("legacy");
+        let background_tab = legacy_workspace.test_add_tab(Some("logs"));
+        let background_pane = legacy_workspace.tabs[background_tab].root_pane;
+        legacy_workspace.tabs[background_tab].runtimes.insert(
+            background_pane,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(10, 5, b""),
+        );
 
-        app.workspaces = vec![one_tab_workspace, two_tab_workspace];
+        app.workspaces = vec![one_tab_workspace, legacy_workspace];
         app.active = Some(0);
         app.selected = 0;
         app.mode = Mode::Terminal;
 
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
 
-        let one_tab_size = app.workspaces[0].tabs[0].runtimes[&one_tab_pane].current_size();
-        let two_tab_size =
-            app.workspaces[1].tabs[background_tab].runtimes[&two_tab_pane].current_size();
-        assert_eq!(one_tab_size, (20, 53));
-        assert_eq!(two_tab_size, (19, 53));
+        assert_eq!(
+            app.workspaces[0].tabs[0].runtimes[&one_tab_pane].current_size(),
+            (20, 53)
+        );
+        assert_eq!(
+            app.workspaces[1].tabs[background_tab].runtimes[&background_pane].current_size(),
+            (20, 53)
+        );
     }
 
     #[tokio::test]
@@ -1043,8 +906,7 @@ mod tests {
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
 
         assert_eq!(app.view.sidebar_rect, Rect::new(0, 0, 0, 20));
-        assert_eq!(app.view.tab_bar_rect, Rect::new(0, 0, 80, 1));
-        assert_eq!(app.view.terminal_area, Rect::new(0, 1, 80, 19));
+        assert_eq!(app.view.terminal_area, Rect::new(0, 0, 80, 20));
         assert!(app.view.workspace_card_areas.is_empty());
 
         let backend = TestBackend::new(80, 20);
@@ -1068,7 +930,7 @@ mod tests {
         terminal.draw(|frame| render(&app, frame)).unwrap();
         let buffer = terminal.backend().buffer();
 
-        let (ws_area, _, _) = collapsed_sidebar_sections(app.view.sidebar_rect);
+        let ws_area = collapsed_workspace_list_rect(app.view.sidebar_rect);
         let active_row = ws_area.y + 1;
         let active_style = buffer[(ws_area.x, active_row)].style();
 
@@ -1109,164 +971,6 @@ mod tests {
         assert_eq!(line2, "   main");
 
         std::fs::remove_dir_all(repo).ok();
-    }
-
-    #[test]
-    fn tab_bar_dims_auto_named_tabs_and_emphasizes_custom_tabs() {
-        let mut app = crate::app::state::AppState::test_new();
-        let mut ws = Workspace::test_new("test");
-        let custom_tab = ws.test_add_tab(Some("logs"));
-        ws.switch_tab(custom_tab);
-
-        app.workspaces = vec![ws];
-        app.active = Some(0);
-        app.selected = 0;
-        app.mode = Mode::Terminal;
-
-        compute_view(&mut app, Rect::new(0, 0, 80, 20));
-
-        let backend = TestBackend::new(80, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render(&app, frame)).unwrap();
-        let buffer = terminal.backend().buffer();
-
-        let auto_rect = app.view.tab_hit_areas[0];
-        let custom_rect = app.view.tab_hit_areas[1];
-        let auto_style = buffer[(auto_rect.x + 1, auto_rect.y)].style();
-        let custom_style = buffer[(custom_rect.x + 1, custom_rect.y)].style();
-
-        assert_eq!(auto_style.fg, Some(app.palette.overlay0));
-        assert!(auto_style.add_modifier.contains(Modifier::DIM));
-        assert_eq!(custom_style.fg, Some(app.palette.panel_bg));
-        assert!(custom_style.add_modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn tab_bar_uses_surface_dim_when_panel_background_resets() {
-        let mut app = crate::app::state::AppState::test_new();
-        let mut ws = Workspace::test_new("test");
-        let custom_tab = ws.test_add_tab(Some("logs"));
-        ws.switch_tab(custom_tab);
-
-        app.palette.panel_bg = Color::Reset;
-        app.workspaces = vec![ws];
-        app.active = Some(0);
-        app.selected = 0;
-        app.mode = Mode::Terminal;
-
-        compute_view(&mut app, Rect::new(0, 0, 80, 20));
-
-        let backend = TestBackend::new(80, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render(&app, frame)).unwrap();
-        let buffer = terminal.backend().buffer();
-
-        let custom_rect = app.view.tab_hit_areas[1];
-        let custom_style = buffer[(custom_rect.x + 1, custom_rect.y)].style();
-
-        assert_eq!(custom_style.bg, Some(app.palette.accent));
-        assert_eq!(custom_style.fg, Some(app.palette.surface_dim));
-        assert!(custom_style.add_modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn new_tab_button_tracks_rightmost_tab_when_tabs_fit() {
-        let mut app = crate::app::state::AppState::test_new();
-        let mut ws = Workspace::test_new("test");
-        ws.test_add_tab(Some("logs"));
-
-        app.workspaces = vec![ws];
-        app.active = Some(0);
-        app.selected = 0;
-        app.mode = Mode::Terminal;
-
-        compute_view(&mut app, Rect::new(0, 0, 80, 20));
-
-        let last_visible = app
-            .view
-            .tab_hit_areas
-            .iter()
-            .rev()
-            .find(|rect| rect.width > 0)
-            .copied()
-            .expect("last visible tab");
-
-        assert_eq!(
-            app.view.new_tab_hit_area.x,
-            last_visible.x + last_visible.width
-        );
-    }
-
-    #[test]
-    fn tab_bar_shows_scroll_controls_when_tabs_overflow() {
-        let mut app = crate::app::state::AppState::test_new();
-        let mut ws = Workspace::test_new("test");
-        for name in ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"] {
-            ws.test_add_tab(Some(name));
-        }
-
-        app.workspaces = vec![ws];
-        app.active = Some(0);
-        app.selected = 0;
-        app.mode = Mode::Terminal;
-        app.tab_scroll_follow_active = false;
-        app.tab_scroll = 2;
-
-        compute_view(&mut app, Rect::new(0, 0, 65, 20));
-
-        assert!(app.view.tab_scroll_left_hit_area.width > 0);
-        assert!(app.view.tab_scroll_right_hit_area.width > 0);
-        assert_eq!(app.view.tab_hit_areas[0].width, 0);
-        assert_eq!(app.view.tab_hit_areas[1].width, 0);
-        assert!(app.view.tab_hit_areas[2].width > 0);
-        assert!(app.view.new_tab_hit_area.width > 0);
-
-        let last_visible = app
-            .view
-            .tab_hit_areas
-            .iter()
-            .rev()
-            .find(|rect| rect.width > 0)
-            .copied()
-            .expect("last visible tab");
-
-        assert_eq!(
-            app.view.tab_scroll_right_hit_area.x,
-            last_visible.x + last_visible.width
-        );
-        assert_eq!(
-            app.view.new_tab_hit_area.x,
-            app.view.tab_scroll_right_hit_area.x + app.view.tab_scroll_right_hit_area.width
-        );
-    }
-
-    #[test]
-    fn tab_bar_clamps_manual_scroll_at_last_visible_tab() {
-        let mut app = crate::app::state::AppState::test_new();
-        let mut ws = Workspace::test_new("test");
-        for name in [
-            "one", "two", "three", "four", "five", "six", "seven", "eight",
-        ] {
-            ws.test_add_tab(Some(name));
-        }
-
-        app.workspaces = vec![ws];
-        app.active = Some(0);
-        app.selected = 0;
-        app.mode = Mode::Terminal;
-        app.tab_scroll_follow_active = false;
-        app.tab_scroll = usize::MAX;
-
-        compute_view(&mut app, Rect::new(0, 0, 65, 20));
-
-        let last_idx = app.workspaces[0].tabs.len() - 1;
-        assert!(app.view.tab_hit_areas[last_idx].width > 0);
-        let clamped_scroll = app.tab_scroll;
-
-        app.scroll_tabs_right();
-
-        assert_eq!(app.tab_scroll, clamped_scroll);
-        assert!(app.view.tab_hit_areas[last_idx].width > 0);
     }
 
     #[test]

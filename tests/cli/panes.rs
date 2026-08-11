@@ -1,7 +1,7 @@
 use super::harness::*;
 
 #[test]
-fn pane_close_only_removes_the_target_tab_when_other_tabs_exist() {
+fn pane_close_removes_only_target_pane_and_tab_creation_is_rejected() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
@@ -21,13 +21,34 @@ fn pane_close_only_removes_the_target_tab_when_other_tabs_exist() {
         .unwrap()
         .to_string();
 
-    let created_tab = run_cli(
+    let root_pane_id = created_json["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let rejected_tab = run_cli(
         &socket_path,
         &["tab", "create", "--workspace", &workspace_id],
     );
-    assert!(created_tab.status.success());
-    let created_tab_json: serde_json::Value = serde_json::from_slice(&created_tab.stdout).unwrap();
-    let second_root_pane_id = created_tab_json["result"]["root_pane"]["pane_id"]
+    assert_eq!(rejected_tab.status.code(), Some(1));
+    let rejected_tab_error: serde_json::Value =
+        serde_json::from_slice(&rejected_tab.stderr).unwrap();
+    assert_eq!(rejected_tab_error["error"]["code"], "multi_tab_unsupported");
+
+    let tabs_before_split =
+        run_cli_json(&socket_path, &["tab", "list", "--workspace", &workspace_id]);
+    assert_eq!(
+        tabs_before_split["result"]["tabs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let split = run_cli_json(
+        &socket_path,
+        &["pane", "split", &root_pane_id, "--direction", "right"],
+    );
+    let second_root_pane_id = split["result"]["pane"]["pane_id"]
         .as_str()
         .unwrap()
         .to_string();

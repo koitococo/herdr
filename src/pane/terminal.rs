@@ -2704,7 +2704,27 @@ fn ghostty_recent_text_for_terminal(
     terminal: &crate::ghostty::Terminal,
     lines: usize,
 ) -> Result<String, crate::ghostty::Error> {
-    let Some((start, end, cols)) = ghostty_recent_read_range(terminal, lines)? else {
+    // A cleared viewport must stay empty even if scrollback precedes it. Only
+    // compensate for its trailing padding after proving the logical bottom
+    // viewport still contains output.
+    let viewport_rows = usize::from(terminal.rows()?);
+    let total_rows = terminal.total_rows()?;
+    let cols = terminal.cols()?;
+    let viewport_start = total_rows.saturating_sub(viewport_rows);
+    let mut viewport = Vec::with_capacity(viewport_rows);
+    for y in viewport_start..total_rows {
+        viewport.push(ghostty_screen_row(terminal, cols, y as u32)?);
+    }
+    trim_trailing_blank_rows(&mut viewport);
+    if viewport.is_empty() {
+        return Ok(String::new());
+    }
+
+    // `total_rows` includes unoccupied viewport padding. Include that padding
+    // in the range before trimming it so a small recent limit still reaches
+    // the most recent terminal output.
+    let requested_rows = lines.saturating_add(viewport_rows);
+    let Some((start, end, cols)) = ghostty_recent_read_range(terminal, requested_rows)? else {
         return Ok(String::new());
     };
     let mut rows = Vec::with_capacity(end.saturating_sub(start).saturating_add(1));
@@ -2784,7 +2804,6 @@ fn ghostty_extract_selection(
     core.terminal
         .read_text_screen((start_col, start_row), (end_col, end_row), false)
 }
-
 fn ghostty_screen_row(
     terminal: &crate::ghostty::Terminal,
     cols: u16,

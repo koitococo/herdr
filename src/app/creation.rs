@@ -137,87 +137,6 @@ impl App {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn create_tab(&mut self) {
-        let custom_name = self.state.requested_new_tab_name.take();
-        let active_before = self.state.active;
-        let follow_cwd = self.state.active.and_then(|ws_idx| {
-            self.focused_pane_cwd_in_workspace(ws_idx)
-                .or_else(|| self.seed_cwd_from_workspace(ws_idx))
-        });
-        let initial_cwd = self.resolve_new_terminal_cwd(follow_cwd);
-        match self.create_tab_with_options(initial_cwd, true) {
-            Ok(created_idx) => {
-                let created_workspace = active_before.is_none();
-                let ws_idx = if created_workspace {
-                    Some(created_idx)
-                } else {
-                    self.state.active
-                };
-                let tab_idx = if created_workspace { 0 } else { created_idx };
-                if let Some(name) = custom_name {
-                    if let Some(ws) =
-                        ws_idx.and_then(|ws_idx| self.state.workspaces.get_mut(ws_idx))
-                    {
-                        if let Some(tab) = ws.tabs.get_mut(tab_idx) {
-                            tab.set_custom_name(name);
-                        }
-                        self.schedule_session_save();
-                    }
-                }
-                if let Some(ws_idx) = ws_idx {
-                    if created_workspace {
-                        self.emit_workspace_open_events(ws_idx);
-                    } else {
-                        self.emit_tab_created_events(ws_idx, tab_idx);
-                    }
-                }
-            }
-            Err(e) => {
-                error!(err = %e, "failed to create tab");
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn create_tab_with_options(
-        &mut self,
-        initial_cwd: PathBuf,
-        focus: bool,
-    ) -> std::io::Result<usize> {
-        let Some(ws_idx) = self.state.active else {
-            return self.create_workspace_with_options(initial_cwd, focus);
-        };
-        let (rows, cols) = self.state.estimate_pane_size();
-        let ws = &mut self.state.workspaces[ws_idx];
-        let (idx, terminal, runtime) = ws.create_tab(
-            rows,
-            cols,
-            initial_cwd,
-            self.state.pane_scrollback_limit_bytes,
-            self.state.host_terminal_theme,
-            self.state.host_terminal_appearance,
-            crate::pane::PaneShellConfig::new(&self.state.default_shell, self.state.shell_mode),
-            Vec::new(),
-        )?;
-        let root_pane = ws.tabs[idx].root_pane;
-        self.terminal_runtimes.insert(terminal.id.clone(), runtime);
-        self.state.terminals.insert(terminal.id.clone(), terminal);
-        self.state.remove_alias_shadowed_by_new_pane(root_pane);
-        if focus {
-            self.state.switch_workspace_tab(ws_idx, idx);
-            self.state.mode = Mode::Terminal;
-        }
-        let workspace_id = self.state.workspaces[ws_idx].id.clone();
-        let tab_id = self
-            .public_tab_id(ws_idx, idx)
-            .unwrap_or_else(|| crate::workspace::public_tab_id_for_number(&workspace_id, idx + 1));
-        let root_pane = self.state.workspaces[ws_idx].tabs[idx].root_pane.raw();
-        crate::logging::tab_created(&workspace_id, &tab_id, root_pane);
-        self.schedule_session_save();
-        Ok(idx)
-    }
-
     pub(crate) fn create_workspace_with_options(
         &mut self,
         initial_cwd: PathBuf,
@@ -360,17 +279,6 @@ impl App {
         self.emit_layout_updated_event(ws_idx, 0);
     }
 
-    pub(crate) fn emit_tab_created_events(&mut self, ws_idx: usize, tab_idx: usize) {
-        let Some(tab) = self.tab_info(ws_idx, tab_idx) else {
-            return;
-        };
-        let Some(root_pane) = self.root_pane_info(ws_idx, tab_idx) else {
-            return;
-        };
-        self.emit_tab_and_pane_created_events(tab, root_pane);
-        self.emit_layout_updated_event(ws_idx, tab_idx);
-    }
-
     fn emit_tab_and_pane_created_events(
         &mut self,
         tab: crate::api::schema::TabInfo,
@@ -394,17 +302,6 @@ impl App {
             workspace: self.workspace_info(ws_idx),
             tab: self.tab_info(ws_idx, 0)?,
             root_pane: self.root_pane_info(ws_idx, 0)?,
-        })
-    }
-
-    pub(super) fn tab_created_result(
-        &self,
-        ws_idx: usize,
-        tab_idx: usize,
-    ) -> Option<crate::api::schema::ResponseResult> {
-        Some(crate::api::schema::ResponseResult::TabCreated {
-            tab: self.tab_info(ws_idx, tab_idx)?,
-            root_pane: self.root_pane_info(ws_idx, tab_idx)?,
         })
     }
 

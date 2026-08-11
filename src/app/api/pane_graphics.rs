@@ -606,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn info_reports_visibility_for_terminal_surface_workspace_tab_and_zoom() {
+    fn info_reports_visibility_for_terminal_surface_workspace_and_zoom() {
         let (mut app, pane_id) = app();
         app.state.mode = crate::app::Mode::Terminal;
         app.state.active = Some(0);
@@ -634,17 +634,6 @@ mod tests {
         );
         assert!(!pane_visible(&hidden));
 
-        let inactive_tab = app.state.workspaces[0].test_add_tab(Some("inactive"));
-        let inactive_pane = app.state.workspaces[0].tabs[inactive_tab].root_pane;
-        let inactive_id = app.public_pane_id(0, inactive_pane).unwrap();
-        let hidden_tab = app.handle_pane_graphics_info(
-            "hidden-tab".into(),
-            crate::api::schema::PaneTarget {
-                pane_id: inactive_id,
-            },
-        );
-        assert!(!pane_visible(&hidden_tab));
-
         app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
         app.state.workspaces[0].tabs[0].zoomed = true;
         let zoomed_away = app.handle_pane_graphics_info(
@@ -662,6 +651,29 @@ mod tests {
             crate::api::schema::PaneTarget { pane_id },
         );
         assert!(pane_visible(&short_lived_mode));
+    }
+
+    #[test]
+    fn info_reports_legacy_inactive_tab_as_not_visible() {
+        let (mut app, _pane_id) = app();
+        app.state.mode = crate::app::Mode::Terminal;
+        app.state.active = Some(0);
+        app.state.host_cell_size = crate::kitty_graphics::HostCellSize {
+            width_px: 10,
+            height_px: 20,
+        };
+        let inactive_tab = app.state.workspaces[0].test_add_tab(Some("legacy"));
+        let inactive_pane = app.state.workspaces[0].tabs[inactive_tab].root_pane;
+        let inactive_id = app.public_pane_id(0, inactive_pane).unwrap();
+
+        let hidden = app.handle_pane_graphics_info(
+            "legacy-inactive-tab".into(),
+            crate::api::schema::PaneTarget {
+                pane_id: inactive_id,
+            },
+        );
+
+        assert!(!pane_visible(&hidden));
     }
 
     #[test]
