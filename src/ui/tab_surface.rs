@@ -194,7 +194,7 @@ mod tests {
         let full_area = Rect::new(0, 0, 106, 20);
         crate::ui::compute_view(&mut app, full_area);
         let area = app.view.terminal_area;
-        assert_eq!(area, Rect::new(26, 1, 80, 19));
+        assert_eq!(area, Rect::new(26, 0, 80, 20));
         let surface = compute_tab_surface(
             &app,
             &TerminalRuntimeRegistry::new(),

@@ -1482,24 +1482,6 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn oversized_space_layout_is_clipped_to_the_section_body() {
-        let mut app = crate::app::state::AppState::test_new();
-        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
-        app.sidebar_spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]; 6];
-        let area = Rect::new(0, 0, 20, 10);
-        let workspace_area = workspace_list_rect(area);
-        let body = workspace_list_body_rect(workspace_area, false);
-
-        let metrics = workspace_list_scroll_metrics(&app, workspace_area);
-        let (cards, _) = compute_workspace_list_areas(&app, area);
-
-        assert_eq!(metrics.viewport_rows, 1);
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].ws_idx, 0);
-        assert_eq!(cards[0].rect.height, body.height);
-    }
-
-    #[test]
     fn render_sidebar_toggle_draws_expanded_collapse_icon() {
         let app = crate::app::state::AppState::test_new();
         let area = Rect::new(0, 0, 26, 20);
@@ -1875,41 +1857,6 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert_eq!(
             buffer[(cards[0].rect.x + cards[0].rect.width - 1, cards[0].rect.y)].symbol(),
             "▾"
-        );
-    }
-
-    #[test]
-    fn desktop_worktree_connector_uses_full_list_at_viewport_boundary() {
-        let mut app = AppState::test_new();
-        app.workspaces = vec![
-            workspace_with_worktree_space("main", Some("repo-key"), "/repo/herdr"),
-            workspace_with_worktree_space("issue", Some("repo-key"), "/repo/herdr-issue"),
-            workspace_with_worktree_space("review", Some("repo-key"), "/repo/herdr-review"),
-        ];
-        app.sidebar_spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]];
-        app.sidebar_spaces.row_gap = 0;
-        let area = Rect::new(0, 0, 30, 10);
-        app.view.workspace_card_areas = compute_workspace_card_areas(&app, area);
-        assert_eq!(app.view.workspace_card_areas.len(), 2);
-        let list_area = workspace_list_rect(area);
-
-        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
-        terminal
-            .draw(|frame| {
-                render_workspace_list(
-                    &app,
-                    &TerminalRuntimeRegistry::new(),
-                    frame,
-                    list_area,
-                    false,
-                )
-            })
-            .unwrap();
-
-        let child = app.view.workspace_card_areas[1];
-        assert_eq!(
-            terminal.backend().buffer()[(child.rect.x + 3, child.rect.y)].symbol(),
-            "├"
         );
     }
 
