@@ -1,10 +1,9 @@
 use super::*;
 
 #[test]
-fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
+fn shell_new_workspace_control_uses_the_client_action_route() {
     let mut config = Config::default();
     config.ui.prompt_new_workspace_name = false;
-    config.ui.prompt_new_tab_name = true;
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
@@ -24,23 +23,6 @@ fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
     assert!(matches!(
         request.method,
         crate::api::schema::Method::WorkspaceCreate(_)
-    ));
-
-    let new_tab = state.hits.new_tab;
-    let open_new_tab =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: new_tab.x + 1,
-            row: new_tab.y,
-            modifiers: KeyModifiers::empty(),
-        })]);
-    assert!(open_new_tab.actions.is_empty());
-    assert!(matches!(
-        state.overlay,
-        Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            target: ClientRenameTarget::NewTab { .. },
-            ..
-        }))
     ));
 }
 

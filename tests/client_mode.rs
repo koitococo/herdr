@@ -824,7 +824,11 @@ fn attach_thin_client_with_config(
         }
         thread::sleep(Duration::from_millis(30));
     }
-    let _ = attached;
+    assert!(
+        attached,
+        "thin client must attach and render a frame; output: {:?}",
+        read_output(&output)
+    );
 
     (spawned_server, thin_client, output)
 }
@@ -1614,7 +1618,7 @@ fn read_until_client_attaches(client: &SpawnedHerdr) -> String {
             return output;
         }
     }
-    output
+    panic!("thin client must attach and render a frame; output: {output:?}");
 }
 
 #[test]
