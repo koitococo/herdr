@@ -93,18 +93,20 @@ impl AppState {
     }
 
     pub(crate) fn sidebar_footer_rect(&self) -> Rect {
-        let ws_area = self.workspace_list_rect();
-        if ws_area == Rect::default() {
-            return Rect::default();
-        }
-        let y = ws_area.y + ws_area.height.saturating_sub(1);
-        Rect::new(ws_area.x, y, ws_area.width, 1)
+        crate::ui::workspace_list_footer_rect(self.workspace_list_rect())
     }
 
     pub(crate) fn sidebar_new_button_rect(&self) -> Rect {
+        const NEW_LABEL_WIDTH: u16 = 4;
+
         let footer = self.sidebar_footer_rect();
-        let width = 5u16.min(footer.width.max(1));
-        Rect::new(footer.x, footer.y, width, footer.height)
+        let controls_right = crate::ui::expanded_sidebar_toggle_rect(self.view.sidebar_rect).x;
+        let available_width = controls_right.saturating_sub(footer.x);
+        if footer == Rect::default() || available_width < NEW_LABEL_WIDTH {
+            return Rect::default();
+        }
+
+        Rect::new(footer.x, footer.y, 5.min(available_width), 1)
     }
 
     pub(crate) fn global_launcher_rect(&self) -> Rect {
@@ -113,14 +115,23 @@ impl AppState {
         }
 
         let footer = self.sidebar_footer_rect();
-        let width = if self.global_menu_attention_badge_visible() {
-            8
-        } else {
-            6
+        let controls_right = crate::ui::expanded_sidebar_toggle_rect(self.view.sidebar_rect).x;
+        let new_button = self.sidebar_new_button_rect();
+        if footer == Rect::default() || controls_right <= new_button.x + new_button.width {
+            return Rect::default();
         }
-        .min(footer.width.max(1));
-        let x = footer.x + footer.width.saturating_sub(width);
-        Rect::new(x, footer.y, width, footer.height)
+
+        let width = if self.global_menu_attention_badge_visible() {
+            6
+        } else {
+            4
+        };
+        let available_width = controls_right - (new_button.x + new_button.width);
+        if available_width < width {
+            return Rect::default();
+        }
+
+        Rect::new(controls_right - width, footer.y, width, 1)
     }
 
     pub(crate) fn global_menu_labels(&self) -> Vec<&'static str> {
@@ -351,6 +362,23 @@ mod tests {
         config::SidebarCollapsedModeConfig,
         workspace::Workspace,
     };
+
+    #[test]
+    fn desktop_footer_controls_preserve_labels_or_hide_them_at_narrow_widths() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_collapsed = false;
+        app.state.view.sidebar_rect = Rect::new(0, 0, 8, 4);
+
+        let footer = app.state.sidebar_footer_rect();
+        let new_button = app.state.sidebar_new_button_rect();
+        let launcher = app.state.global_launcher_rect();
+        let toggle = crate::ui::expanded_sidebar_toggle_rect(app.state.view.sidebar_rect);
+
+        assert_eq!(footer, Rect::new(0, 2, 7, 1));
+        assert_eq!(new_button, Rect::new(0, 2, 5, 1));
+        assert_eq!(launcher, Rect::default());
+        assert!(new_button.x + new_button.width <= toggle.x);
+    }
 
     #[test]
     fn clicking_launcher_opens_global_menu() {

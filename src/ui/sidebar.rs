@@ -360,14 +360,27 @@ pub(crate) fn workspace_list_rect(area: Rect) -> Rect {
     Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height)
 }
 
+pub(crate) fn workspace_list_footer_rect(area: Rect) -> Rect {
+    if area.width == 0 || area.height < WORKSPACE_SECTION_HEADER_ROWS.saturating_add(2) {
+        return Rect::default();
+    }
+
+    Rect::new(
+        area.x,
+        area.y + area.height.saturating_sub(2),
+        area.width,
+        1,
+    )
+}
+
 pub(crate) fn workspace_list_body_rect(area: Rect, has_scrollbar: bool) -> Rect {
-    if area.width == 0 || area.height <= WORKSPACE_SECTION_HEADER_ROWS {
+    let footer = workspace_list_footer_rect(area);
+    if footer == Rect::default() {
         return Rect::default();
     }
 
     let body_y = area.y.saturating_add(WORKSPACE_SECTION_HEADER_ROWS);
-    let footer_y = area.y + area.height.saturating_sub(1);
-    let body_height = footer_y.saturating_sub(body_y);
+    let body_height = footer.y.saturating_sub(body_y);
     let body_width = area.width.saturating_sub(u16::from(has_scrollbar));
     Rect::new(area.x, body_y, body_width, body_height)
 }
@@ -613,10 +626,11 @@ pub(crate) fn workspace_drop_slots(
     cards: &[crate::app::state::WorkspaceCardArea],
     area: Rect,
 ) -> Vec<(crate::app::state::WorkspaceDropTarget, u16)> {
-    if area.height == 0 || cards.is_empty() {
+    let footer = workspace_list_footer_rect(area);
+    if footer == Rect::default() || cards.is_empty() {
         return Vec::new();
     }
-    let list_bottom = area.y + area.height.saturating_sub(1);
+    let list_bottom = footer.y;
     let entries = workspace_list_entries(app);
     let entry_position = |ws_idx| {
         entries.iter().position(|entry| {
@@ -946,7 +960,8 @@ fn render_workspace_list(
         _ => None,
     };
 
-    let list_bottom = area.y + area.height.saturating_sub(1);
+    let footer = workspace_list_footer_rect(area);
+    let list_bottom = footer.y;
     if area.height > 0 {
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
@@ -1121,7 +1136,7 @@ fn render_workspace_list(
         render_scrollbar(frame, metrics, track, p.surface_dim, p.overlay0, "▕");
     }
 
-    if app.mouse_capture && list_bottom > area.y {
+    if app.mouse_capture && footer != Rect::default() {
         let new_rect = app.sidebar_new_button_rect();
         frame.render_widget(
             Paragraph::new(Span::styled(" new", Style::default().fg(p.overlay0))),
@@ -1497,6 +1512,58 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             terminal.backend().buffer()[(toggle.x, toggle.y)].symbol(),
             "«"
         );
+    }
+
+    #[test]
+    fn expanded_sidebar_footer_renders_controls_above_toggle_without_overlap() {
+        let mut app = crate::app::state::AppState::test_new();
+        let area = Rect::new(0, 0, 26, 20);
+        app.mouse_capture = true;
+        app.view.sidebar_rect = area;
+
+        let workspace_area = workspace_list_rect(area);
+        let footer = workspace_list_footer_rect(workspace_area);
+        let body = workspace_list_body_rect(workspace_area, false);
+        let new_button = app.sidebar_new_button_rect();
+        let launcher = app.global_launcher_rect();
+        let toggle = expanded_sidebar_toggle_rect(area);
+        assert_eq!(footer.y, area.y + area.height - 2);
+        assert!(body.y + body.height <= footer.y);
+        assert!(new_button.x + new_button.width <= launcher.x);
+        assert!(launcher.x + launcher.width <= toggle.x);
+
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+            .expect("test terminal should initialize");
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .expect("sidebar should render");
+
+        let buffer = terminal.backend().buffer();
+        assert!(row_text(buffer, footer.y, area.width).contains("new"));
+        assert!(row_text(buffer, footer.y, area.width).contains("menu"));
+        assert_eq!(buffer[(toggle.x, toggle.y)].symbol(), "«");
+    }
+
+    #[test]
+    fn expanded_sidebar_body_cards_scrollbar_and_drop_slots_stop_before_footer() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = (0..20)
+            .map(|index| Workspace::test_new(&format!("space-{index}")))
+            .collect();
+        let area = workspace_list_rect(Rect::new(0, 0, 26, 20));
+        let footer = workspace_list_footer_rect(area);
+        let body = workspace_list_body_rect(area, false);
+        let cards = compute_workspace_card_areas(&app, Rect::new(0, 0, 26, 20));
+
+        assert!(body.y + body.height <= footer.y);
+        assert!(cards
+            .iter()
+            .all(|card| card.rect.y + card.rect.height <= footer.y));
+        assert!(workspace_list_scrollbar_rect(&app, area)
+            .is_some_and(|scrollbar| scrollbar.y + scrollbar.height <= footer.y));
+        assert!(workspace_drop_slots(&app, &cards, area)
+            .iter()
+            .all(|(_, row)| *row < footer.y));
     }
 
     #[test]
@@ -1906,7 +1973,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         );
         let spacious_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 7));
         assert_eq!(spacious_metrics.viewport_rows, 3);
-        assert_eq!(spacious_metrics.max_offset_from_bottom, 2);
+        assert_eq!(spacious_metrics.max_offset_from_bottom, 3);
 
         app.sidebar_spaces.row_gap = 0;
         let (packed, _) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 30));
@@ -1914,8 +1981,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .windows(2)
             .all(|pair| pair[1].rect.y == pair[0].rect.y + pair[0].rect.height));
         let packed_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 7));
-        assert_eq!(packed_metrics.viewport_rows, 4);
-        assert_eq!(packed_metrics.max_offset_from_bottom, 0);
+        assert_eq!(packed_metrics.viewport_rows, 3);
+        assert_eq!(packed_metrics.max_offset_from_bottom, 1);
     }
 
     #[test]
