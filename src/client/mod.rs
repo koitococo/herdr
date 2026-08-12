@@ -340,32 +340,19 @@ impl ClientState {
     }
 }
 
-fn encode_semantic_frame(
-    blit_encoder: &render_ansi::BlitEncoder,
-    frame_data: &FrameData,
-    repaint_pending: &mut bool,
-    suppress_visible_cursor: bool,
-) -> render_ansi::EncodedBlit {
-    let repaint = std::mem::take(repaint_pending);
-    if suppress_visible_cursor {
-        blit_encoder.encode_with_suppressed_visible_cursor(frame_data, repaint)
-    } else {
-        blit_encoder.encode(frame_data, repaint)
-    }
-}
-
 fn render_semantic_frame(state: &mut ClientState, frame_data: FrameData) {
     let frame_data = if state.draw_host_cursor {
         render_ansi::frame_with_drawn_cursor(frame_data)
     } else {
         frame_data
     };
-    let encoded = encode_semantic_frame(
-        &state.blit_encoder,
-        &frame_data,
-        &mut state.repaint_pending,
-        state.draw_host_cursor,
-    );
+    let encoded = if state.draw_host_cursor {
+        state
+            .blit_encoder
+            .encode_with_suppressed_visible_cursor(&frame_data, false)
+    } else {
+        state.blit_encoder.encode(&frame_data, false)
+    };
     let mut stdout = io::stdout();
     let graphics = if state.kitty_graphics_enabled {
         frame_data.graphics.as_slice()
@@ -3134,42 +3121,6 @@ mod tests {
         assert!(!direct_graphics_profile_values(
             "ghostty", "", false, false, false
         ));
-    }
-
-    fn semantic_test_frame() -> FrameData {
-        FrameData {
-            cells: vec![crate::protocol::CellData {
-                symbol: "A".to_owned(),
-                fg: 0,
-                bg: 0,
-                modifier: 0,
-                skip: false,
-                hyperlink: None,
-            }],
-            width: 1,
-            height: 1,
-            cursor: None,
-            hyperlinks: Vec::new(),
-            graphics: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn repaint_pending_forces_semantic_frame_cell_output() {
-        let frame = semantic_test_frame();
-        let mut encoder = render_ansi::BlitEncoder::new();
-        let mut initial_repaint_pending = false;
-        let initial = encode_semantic_frame(&encoder, &frame, &mut initial_repaint_pending, false);
-        encoder.commit(frame.clone(), initial);
-
-        let mut repaint_pending = true;
-        let repaint = encode_semantic_frame(&encoder, &frame, &mut repaint_pending, false);
-
-        assert!(repaint.full);
-        assert!(!repaint_pending);
-        assert!(String::from_utf8(repaint.bytes)
-            .expect("ANSI frame output should be UTF-8")
-            .contains('A'));
     }
 
     fn restore_env_var(key: &str, value: Option<OsString>) {
