@@ -33,8 +33,8 @@ use crossterm::event::{
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 #[cfg(not(windows))]
 use crossterm::event::{PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
+use crossterm::execute;
 use crossterm::terminal::{DisableLineWrap, EnableLineWrap};
-use crossterm::{execute, queue};
 use interprocess::local_socket::traits::Stream as _;
 use interprocess::TryClone as _;
 use tracing::{debug, info, warn};
@@ -468,126 +468,6 @@ impl From<protocol::FramingError> for ClientError {
 // ---------------------------------------------------------------------------
 // Terminal setup / restore
 // ---------------------------------------------------------------------------
-
-const HOST_MODE_RECONCILIATION_THROTTLE: Duration = Duration::from_millis(250);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HostModeReconciliationReason {
-    UnexpectedMouseReport,
-    OuterFocusGained,
-    Resize,
-}
-
-impl HostModeReconciliationReason {
-    fn is_lifecycle(self) -> bool {
-        !matches!(self, Self::UnexpectedMouseReport)
-    }
-}
-
-#[derive(Default)]
-struct HostModeReconciliationThrottle {
-    last_lifecycle_reconciliation: Option<Instant>,
-}
-
-impl HostModeReconciliationThrottle {
-    fn allows(&mut self, reason: HostModeReconciliationReason, now: Instant) -> bool {
-        if !reason.is_lifecycle() {
-            return true;
-        }
-
-        let allowed = self
-            .last_lifecycle_reconciliation
-            .is_none_or(|last| now.duration_since(last) >= HOST_MODE_RECONCILIATION_THROTTLE);
-        if allowed {
-            self.last_lifecycle_reconciliation = Some(now);
-        }
-        allowed
-    }
-}
-
-fn write_host_mode_reconciliation(
-    writer: &mut impl io::Write,
-    enable_client_protocols: bool,
-    mouse_capture: bool,
-    keyboard_report_all: bool,
-) -> io::Result<()> {
-    #[cfg(not(windows))]
-    {
-        crate::terminal_modes::write_host_mouse_reporting_disable(writer)?;
-        if mouse_capture {
-            queue!(writer, EnableMouseCapture)?;
-        }
-    }
-
-    #[cfg(windows)]
-    let _ = mouse_capture;
-
-    if enable_client_protocols {
-        queue!(writer, EnableBracketedPaste, EnableFocusChange)?;
-        write_current_kitty_keyboard_flags(writer, keyboard_report_all)?;
-        if let Some(mode) = crate::input::host_modify_other_keys_mode() {
-            writer.write_all(mode.set_sequence())?;
-        }
-    }
-
-    queue!(writer, DisableLineWrap)?;
-    writer.flush()
-}
-
-#[cfg(not(windows))]
-fn write_current_kitty_keyboard_flags(
-    writer: &mut impl io::Write,
-    keyboard_report_all: bool,
-) -> io::Result<()> {
-    let mut flags = crate::input::ime_compatible_keyboard_enhancement_flags();
-    if keyboard_report_all {
-        flags |= crossterm::event::KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
-    }
-    write!(writer, "\x1b[={}u", flags.bits())
-}
-
-#[cfg(windows)]
-fn write_current_kitty_keyboard_flags(
-    _writer: &mut impl io::Write,
-    _keyboard_report_all: bool,
-) -> io::Result<()> {
-    Ok(())
-}
-
-fn host_mode_reconciliation_required(
-    events: &[crate::raw_input::RawInputEvent],
-    expected_mouse_capture: bool,
-) -> bool {
-    !expected_mouse_capture
-        && events
-            .iter()
-            .any(|event| matches!(event, crate::raw_input::RawInputEvent::Mouse(_)))
-}
-
-fn should_suppress_reconciled_mouse_input(events: &[crate::raw_input::RawInputEvent]) -> bool {
-    !events.is_empty()
-        && events
-            .iter()
-            .all(|event| matches!(event, crate::raw_input::RawInputEvent::Mouse(_)))
-}
-
-fn reconcile_host_terminal_modes(
-    reason: HostModeReconciliationReason,
-    enable_client_protocols: bool,
-    expected_mouse_capture: bool,
-    expected_keyboard_report_all: bool,
-) -> io::Result<()> {
-    debug!(
-        ?reason,
-        expected_mouse_capture, expected_keyboard_report_all, "reconciling host terminal modes"
-    );
-    write_host_mode_reconciliation(
-        &mut io::stdout(),
-        enable_client_protocols,
-        expected_mouse_capture,
-        expected_keyboard_report_all,
-    )
-}
 
 /// Sets up the terminal for client mode (raw mode, optional mouse, keyboard enhancements).
 ///
@@ -1648,8 +1528,7 @@ async fn run_client_loop(
     negotiated_encoding: RenderEncoding,
     attach_escape: Option<AttachEscapeState>,
 ) -> Result<(), ClientError> {
-    let mut host_mode_reconciliation_throttle = HostModeReconciliationThrottle::default();
-
+    #[cfg(windows)]
     let _ = config.mouse_scroll_lines;
     let draw_host_cursor = attach_escape.is_none() && should_draw_host_cursor(config.host_cursor);
     let is_remote_client = is_remote_client_process();
@@ -1837,31 +1716,6 @@ async fn run_client_loop(
                     }
                 } else {
                     let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
-                    let unexpected_mouse =
-                        host_mode_reconciliation_required(&events, state.mouse_capture_active);
-                    let focus_gained = events.iter().any(|event| {
-                        matches!(event, crate::raw_input::RawInputEvent::OuterFocusGained)
-                    });
-                    let reason = unexpected_mouse
-                        .then_some(HostModeReconciliationReason::UnexpectedMouseReport)
-                        .or_else(|| {
-                            focus_gained.then_some(HostModeReconciliationReason::OuterFocusGained)
-                        });
-                    if let Some(reason) = reason.filter(|reason| {
-                        host_mode_reconciliation_throttle.allows(*reason, Instant::now())
-                    }) {
-                        reconcile_host_terminal_modes(
-                            reason,
-                            true,
-                            state.mouse_capture_active,
-                            state.keyboard_report_all_active,
-                        )
-                        .map_err(ClientError::ConnectionFailed)?;
-                        state.request_repaint();
-                        if unexpected_mouse && should_suppress_reconciled_mouse_input(&events) {
-                            continue;
-                        }
-                    }
                     if crate::raw_input::events_require_host_surface_redraw(
                         &events,
                         state.redraw_on_focus_gained,
@@ -1974,17 +1828,6 @@ async fn run_client_loop(
                 };
                 if let Err(e) = write_to_server(&mut write_stream, &msg) {
                     return Err(ClientError::ConnectionLost(e));
-                }
-                if host_mode_reconciliation_throttle
-                    .allows(HostModeReconciliationReason::Resize, Instant::now())
-                {
-                    reconcile_host_terminal_modes(
-                        HostModeReconciliationReason::Resize,
-                        state.attach_escape.is_none(),
-                        state.mouse_capture_active,
-                        state.keyboard_report_all_active,
-                    )
-                    .map_err(ClientError::ConnectionFailed)?;
                 }
             }
             ClientLoopEvent::SemanticFrameReady => {
@@ -2956,128 +2799,6 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
-    }
-    struct FlushCountingWriter {
-        flushes: usize,
-    }
-
-    impl io::Write for FlushCountingWriter {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            self.flushes += 1;
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn host_mode_reconciliation_flushes_once() {
-        let mut writer = FlushCountingWriter { flushes: 0 };
-
-        write_host_mode_reconciliation(&mut writer, false, false, false).unwrap();
-
-        assert_eq!(writer.flushes, 1);
-    }
-
-    #[test]
-    fn host_mode_reconciliation_detects_only_unexpected_mouse_reports() {
-        let mouse = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[<0;20;10M");
-        let key_and_mouse = crate::raw_input::parse_raw_input_bytes_sync(b"x\x1b[<0;20;10M");
-        let key = crate::raw_input::parse_raw_input_bytes_sync(b"x");
-        let csi_key = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[A");
-
-        assert!(host_mode_reconciliation_required(&mouse, false));
-        assert!(!host_mode_reconciliation_required(&mouse, true));
-        assert!(host_mode_reconciliation_required(&key_and_mouse, false));
-        assert!(!host_mode_reconciliation_required(&key, false));
-        assert!(!host_mode_reconciliation_required(&csi_key, false));
-    }
-
-    #[test]
-    fn reconciled_mouse_input_is_suppressed_only_for_all_mouse_chunks() {
-        let mouse = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[<0;20;10M");
-        let key_and_mouse = crate::raw_input::parse_raw_input_bytes_sync(b"x\x1b[<0;20;10M");
-
-        assert!(should_suppress_reconciled_mouse_input(&mouse));
-        assert!(!should_suppress_reconciled_mouse_input(&key_and_mouse));
-        assert!(!should_suppress_reconciled_mouse_input(&[]));
-    }
-
-    #[test]
-    fn lifecycle_reconciliation_is_throttled_but_mouse_is_not() {
-        let mut throttle = HostModeReconciliationThrottle::default();
-        let now = Instant::now();
-
-        assert!(HostModeReconciliationReason::OuterFocusGained.is_lifecycle());
-        assert!(!HostModeReconciliationReason::UnexpectedMouseReport.is_lifecycle());
-        assert!(throttle.allows(HostModeReconciliationReason::Resize, now));
-        assert!(!throttle.allows(
-            HostModeReconciliationReason::OuterFocusGained,
-            now + Duration::from_millis(249)
-        ));
-        assert!(throttle.allows(
-            HostModeReconciliationReason::OuterFocusGained,
-            now + HOST_MODE_RECONCILIATION_THROTTLE
-        ));
-        assert!(throttle.allows(
-            HostModeReconciliationReason::UnexpectedMouseReport,
-            now + Duration::from_millis(1)
-        ));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn direct_attach_reconciliation_writes_only_owned_modes() {
-        let mut output = Vec::new();
-
-        write_host_mode_reconciliation(&mut output, false, true, true).unwrap();
-
-        assert!(output.starts_with(b"\x1b[?1006l"));
-        assert!(output.ends_with(b"\x1b[?7l"));
-        assert!(output
-            .windows(b"\x1b[?1000h".len())
-            .any(|bytes| bytes == b"\x1b[?1000h"));
-        assert!(!output
-            .windows(b"\x1b[?2004h".len())
-            .any(|bytes| bytes == b"\x1b[?2004h"));
-        assert!(!output
-            .windows(b"\x1b[?1004h".len())
-            .any(|bytes| bytes == b"\x1b[?1004h"));
-        assert!(!output
-            .windows(b"\x1b[=15u".len())
-            .any(|bytes| bytes == b"\x1b[=15u"));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn full_client_reconciliation_restores_client_owned_modes() {
-        let mut output = Vec::new();
-
-        write_host_mode_reconciliation(&mut output, true, false, true).unwrap();
-
-        assert!(output.starts_with(b"\x1b[?1006l"));
-        assert!(output
-            .windows(b"\x1b[?1004h".len())
-            .any(|bytes| bytes == b"\x1b[?1004h"));
-        assert!(output
-            .windows(b"\x1b[?2004h".len())
-            .any(|bytes| bytes == b"\x1b[?2004h"));
-        assert!(output
-            .windows(b"\x1b[=15u".len())
-            .any(|bytes| bytes == b"\x1b[=15u"));
-        for sequence in [
-            b"\x1b[?1000h",
-            b"\x1b[?1002h",
-            b"\x1b[?1003h",
-            b"\x1b[?1006h",
-        ] {
-            assert!(!output
-                .windows(sequence.len())
-                .any(|bytes| bytes == sequence));
-        }
-        assert!(output.ends_with(b"\x1b[?7l"));
     }
 
     #[test]

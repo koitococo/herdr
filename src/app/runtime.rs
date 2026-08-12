@@ -6,8 +6,8 @@ use std::time::Duration;
 use crossterm::terminal;
 
 use super::{
-    background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL, RESIZE_POLL_INTERVAL,
-    SELECTION_AUTOSCROLL_INTERVAL,
+    background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL,
+    RESIZE_POLL_INTERVAL, SELECTION_AUTOSCROLL_INTERVAL,
 };
 fn retain_detached_process_after_wait(
     pid: u32,
