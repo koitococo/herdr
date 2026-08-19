@@ -35,6 +35,7 @@ use std::future::pending;
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+const MIN_RENDER_INTERVAL: Duration = Duration::from_millis(16);
 
 pub(crate) const SELECTION_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
 const RESIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);

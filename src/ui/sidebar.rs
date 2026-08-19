@@ -1385,7 +1385,7 @@ mod tests {
             .draw(|frame| render_sidebar_collapsed(&app, frame, area))
             .unwrap();
 
-        let (workspace_area, _, _) = collapsed_sidebar_sections(area);
+        let workspace_area = collapsed_workspace_list_rect(area);
         assert_eq!(
             terminal.backend().buffer()[(workspace_area.x, workspace_area.y)].bg,
             app.palette.active_row_bg

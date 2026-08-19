@@ -3609,6 +3609,7 @@ mod tests {
         assert_eq!(app.state.mobile_switcher_scroll, 4);
         let action = app.state.handle_mouse(
             &mut app.terminal_runtimes,
+            crate::app::LOCAL_INPUT_SOURCE,
             mouse(
                 MouseEventKind::Down(MouseButton::Left),
                 viewport.x + 2,
