@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use super::{
     background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL, MIN_RENDER_INTERVAL,
+
 };
 fn retain_detached_process_after_wait(
     pid: u32,

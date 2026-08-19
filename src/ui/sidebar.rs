@@ -294,3 +294,4 @@ fn apply_token_style(mut style: Style, patch: crate::config::SidebarTokenStyle) 
     }
     style
 }
+
