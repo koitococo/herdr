@@ -760,6 +760,22 @@ impl ClientPaneClick {
             && self.col.abs_diff(next.col) <= 1
     }
 }
+#[derive(Clone, Debug)]
+pub(super) struct ClientWorkspaceClick {
+    pub(super) endpoint_id: ClientEndpointId,
+    pub(super) workspace_id: String,
+    pub(super) at: std::time::Instant,
+}
+
+impl ClientWorkspaceClick {
+    pub(super) fn is_double_click_for(&self, next: &Self) -> bool {
+        self.endpoint_id == next.endpoint_id
+            && self.workspace_id == next.workspace_id
+            && next.at.duration_since(self.at) <= std::time::Duration::from_millis(350)
+    }
+}
+
+pub(crate) type InputSourceId = u8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ClientSelectionAutoscrollDirection {
@@ -885,6 +901,7 @@ pub(crate) struct ClientShellState {
     pub(super) url_click_consumes_until_up: bool,
     pub(super) replaying_url_click: bool,
     pub(super) selection: Option<crate::selection::Selection<String>>,
+    pub(super) last_workspace_clicks: HashMap<InputSourceId, ClientWorkspaceClick>,
     pub(super) last_pane_click: Option<ClientPaneClick>,
     pub(super) selection_autoscroll: Option<ClientSelectionAutoscroll>,
     pub(super) selection_autoscroll_deadline: Option<std::time::Instant>,
@@ -1047,6 +1064,7 @@ impl ClientShellState {
             url_click_consumes_until_up: false,
             replaying_url_click: false,
             selection: None,
+            last_workspace_clicks: HashMap::new(),
             last_pane_click: None,
             selection_autoscroll: None,
             selection_autoscroll_deadline: None,
@@ -1196,6 +1214,26 @@ impl ClientShellState {
         }
     }
 
+    pub(super) fn clear_workspace_double_click(&mut self, source_id: InputSourceId) {
+        self.last_workspace_clicks.remove(&source_id);
+    }
+
+    pub(crate) fn clear_input_source(&mut self, source_id: InputSourceId) {
+        self.clear_workspace_double_click(source_id);
+    }
+
+    pub(super) fn clear_workspace_double_clicks(&mut self) {
+        self.last_workspace_clicks.clear();
+    }
+
+    pub(super) fn clear_workspace_double_clicks_for_endpoint(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+    ) {
+        self.last_workspace_clicks
+            .retain(|_, click| &click.endpoint_id != endpoint_id);
+    }
+
     pub(super) fn reset_endpoint_projection(&mut self) {
         self.hits = ShellHitMap::default();
         self.pane_surface = None;
@@ -1239,6 +1277,7 @@ impl ClientShellState {
         self.url_click_consumes_until_up = false;
         self.replaying_url_click = false;
         self.selection = None;
+        self.clear_workspace_double_clicks();
         self.last_pane_click = None;
         self.selection_autoscroll = None;
         self.selection_autoscroll_deadline = None;

@@ -354,24 +354,37 @@ impl ClientShellState {
     }
 
     pub(super) fn open_rename_workspace_overlay(&mut self) {
-        let Some(snapshot) = self.snapshot.as_deref() else {
-            return;
-        };
         let Some(workspace_id) = self.workspace_action_id() else {
             return;
+        };
+        let endpoint_id = self.active_endpoint_id.clone();
+        self.open_rename_workspace_overlay_for(&endpoint_id, workspace_id);
+    }
+
+    pub(super) fn open_rename_workspace_overlay_for(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        workspace_id: String,
+    ) -> bool {
+        if endpoint_id != &self.active_endpoint_id {
+            return false;
+        }
+        let Some(snapshot) = self.snapshot.as_deref() else {
+            return false;
         };
         let Some(workspace) = snapshot
             .workspaces
             .iter()
             .find(|workspace| workspace.workspace_id == workspace_id)
         else {
-            return;
+            return false;
         };
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
             title: "rename workspace",
             input: TextEditor::new(&workspace.label, false),
             target: ClientRenameTarget::Workspace { workspace_id },
         }));
+        true
     }
 
     pub(super) fn open_new_tab_overlay(&mut self) {

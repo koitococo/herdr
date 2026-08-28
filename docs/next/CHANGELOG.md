@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Desktop workspace cards can now be double-clicked to open the existing rename dialog without changing the workspace/API rename path.
 
 ## [0.9.1] - 2026-09-16
 

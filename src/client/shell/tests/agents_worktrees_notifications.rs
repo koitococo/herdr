@@ -50,6 +50,123 @@ fn mouse_hits_use_stable_workspace_tab_and_pane_ids() {
 }
 
 #[test]
+fn workspace_double_click_renames_the_exact_card_through_existing_action() {
+    let mut projected = snapshot();
+    let mut second = projected.workspaces[0].clone();
+    second.workspace_id = "ws_2".into();
+    second.number = 2;
+    second.label = "second".into();
+    second.focused = false;
+    projected.workspaces.push(second);
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state.compose(106, 20).expect("composed workspace cards");
+    let card = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.workspace_id == "ws_2")
+        .expect("second workspace card")
+        .rect;
+    let mouse = |kind| crossterm::event::MouseEvent {
+        kind,
+        column: card.x + 2,
+        row: card.y,
+        modifiers: KeyModifiers::empty(),
+    };
+
+    let first_down =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(MouseEventKind::Down(
+            MouseButton::Left,
+        )))]);
+    assert!(first_down.actions.is_empty());
+    let first_up =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(MouseEventKind::Up(
+            MouseButton::Left,
+        )))]);
+    assert!(matches!(
+        first_up.actions.as_slice(),
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::WorkspaceFocus(target)
+                    if target.workspace_id == "ws_2"
+            )
+    ));
+
+    let second_down =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(MouseEventKind::Down(
+            MouseButton::Left,
+        )))]);
+    assert!(second_down.repaint);
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+            target: ClientRenameTarget::Workspace { ref workspace_id },
+            ..
+        })) if workspace_id == "ws_2"
+    ));
+
+    state.handle_input_bytes(b"\x15");
+    state.handle_input_bytes(b"renamed");
+    let save = state.handle_input_bytes(b"\r");
+    assert!(matches!(
+        save.actions.as_slice(),
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::WorkspaceRename(params)
+                    if params.workspace_id == "ws_2" && params.label == "renamed"
+            )
+    ));
+}
+
+#[test]
+fn workspace_double_click_candidates_are_isolated_and_released_by_source() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.compose(106, 20).expect("composed workspace card");
+    let card = state.hits.workspaces[0].rect;
+    let mouse = |kind| crossterm::event::MouseEvent {
+        kind,
+        column: card.x + 2,
+        row: card.y,
+        modifiers: KeyModifiers::empty(),
+    };
+
+    state.handle_raw_events_from_input_source(
+        41,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Down(
+            MouseButton::Left,
+        )))],
+    );
+    state.handle_raw_events_from_input_source(
+        42,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Down(
+            MouseButton::Left,
+        )))],
+    );
+    state.handle_raw_events_from_input_source(
+        42,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Up(
+            MouseButton::Left,
+        )))],
+    );
+    state.clear_input_source(41);
+    state.handle_raw_events_from_input_source(
+        41,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Down(
+            MouseButton::Left,
+        )))],
+    );
+
+    assert!(state.overlay.is_none());
+}
+
+#[test]
 fn collapsed_workspace_jitter_remains_a_click() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.sidebar_collapsed = true;

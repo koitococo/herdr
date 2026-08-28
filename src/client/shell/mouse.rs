@@ -651,9 +651,95 @@ impl ClientShellState {
         }
     }
 
-    pub(super) fn handle_mouse(&mut self, mouse: MouseEvent, outcome: &mut ClientShellInput) {
+    fn handle_workspace_double_click(
+        &mut self,
+        source_id: InputSourceId,
+        mouse: MouseEvent,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return false;
+        }
+        let point = (mouse.column, mouse.row);
+        if self.overlay.is_some()
+            || !mouse.modifiers.is_empty()
+            || !matches!(
+                self.mode,
+                ClientShellMode::Terminal | ClientShellMode::Navigate | ClientShellMode::Resize
+            )
+            || self.sidebar_collapsed
+            || self.mobile_layout_active()
+            || !super::contains(self.hits.workspace_body, point)
+            || super::contains(self.hits.workspace_scrollbar, point)
+            || super::contains(self.hits.sidebar_toggle, point)
+            || super::contains(self.hits.new_workspace, point)
+            || super::contains(self.hits.global_launcher, point)
+        {
+            self.clear_workspace_double_click(source_id);
+            return false;
+        }
+        let Some(hit) = self
+            .hits
+            .workspaces
+            .iter()
+            .find(|hit| super::contains(hit.rect, point))
+        else {
+            self.clear_workspace_double_click(source_id);
+            return false;
+        };
+        if hit
+            .group_toggle
+            .as_ref()
+            .is_some_and(|(rect, _)| super::contains(*rect, point))
+        {
+            self.clear_workspace_double_click(source_id);
+            return false;
+        }
+        let click = ClientWorkspaceClick {
+            endpoint_id: hit.endpoint_id.clone(),
+            workspace_id: hit.workspace_id.clone(),
+            at: std::time::Instant::now(),
+        };
+        if self
+            .last_workspace_clicks
+            .get(&source_id)
+            .is_some_and(|previous| previous.is_double_click_for(&click))
+        {
+            self.clear_workspace_double_click(source_id);
+            self.workspace_press = None;
+            self.chrome_drag = None;
+            if self.open_rename_workspace_overlay_for(&click.endpoint_id, click.workspace_id) {
+                outcome.repaint = true;
+                return true;
+            }
+            return false;
+        }
+        self.last_workspace_clicks.insert(source_id, click);
+        false
+    }
+
+    pub(super) fn handle_mouse(
+        &mut self,
+        source_id: InputSourceId,
+        mouse: MouseEvent,
+        outcome: &mut ClientShellInput,
+    ) {
         self.update_link_hover(mouse, outcome);
         let point = (mouse.column, mouse.row);
+        if self.overlay.is_some()
+            || self.mobile_layout_active()
+            || matches!(
+                mouse.kind,
+                MouseEventKind::Drag(MouseButton::Left)
+                    | MouseEventKind::Down(MouseButton::Right)
+                    | MouseEventKind::ScrollUp
+                    | MouseEventKind::ScrollDown
+                    | MouseEventKind::ScrollLeft
+                    | MouseEventKind::ScrollRight
+            )
+        {
+            self.clear_workspace_double_click(source_id);
+        }
         if self.mode == ClientShellMode::Navigate
             && self.workspace_preview_action_blocked()
             && self.overlay.is_none()
@@ -1880,6 +1966,9 @@ impl ClientShellState {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                if self.handle_workspace_double_click(source_id, mouse, outcome) {
+                    return;
+                }
                 if self.selection.take().is_some() {
                     outcome.repaint = true;
                 }

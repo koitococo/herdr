@@ -108,6 +108,7 @@ impl ClientShellState {
     }
 
     pub(crate) fn retire_endpoint(&mut self, endpoint_id: &ClientEndpointId) {
+        self.clear_workspace_double_clicks_for_endpoint(endpoint_id);
         self.retire_endpoint_notifications(endpoint_id);
         if let Some(endpoint) = self
             .endpoints
@@ -141,6 +142,7 @@ impl ClientShellState {
     }
 
     pub(crate) fn mark_endpoint_disconnected(&mut self, endpoint_id: &ClientEndpointId) {
+        self.clear_workspace_double_clicks_for_endpoint(endpoint_id);
         self.set_endpoint_status(endpoint_id, ClientEndpointStatus::Reconnecting);
         if endpoint_id == &self.active_endpoint_id {
             let pending = self.pending_requests.keys().cloned().collect::<Vec<_>>();

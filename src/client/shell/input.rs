@@ -156,7 +156,15 @@ impl ClientShellState {
         outcome
     }
 
-    pub(crate) fn handle_raw_events(&mut self, events: Vec<RawInputEvent>) -> ClientShellInput {
+    pub(super) fn handle_raw_events(&mut self, events: Vec<RawInputEvent>) -> ClientShellInput {
+        self.handle_raw_events_from_input_source(LOCAL_INPUT_SOURCE, events)
+    }
+
+    pub(crate) fn handle_raw_events_from_input_source(
+        &mut self,
+        source_id: InputSourceId,
+        events: Vec<RawInputEvent>,
+    ) -> ClientShellInput {
         let mut outcome = ClientShellInput::default();
         if !events.is_empty() && self.endpoint_error.take().is_some() {
             self.endpoint_error_deadline = None;
@@ -235,7 +243,7 @@ impl ClientShellState {
                         }
                     }
                 }
-                RawInputEvent::Mouse(mouse) => self.handle_mouse(mouse, &mut outcome),
+                RawInputEvent::Mouse(mouse) => self.handle_mouse(source_id, mouse, &mut outcome),
                 RawInputEvent::OuterFocusGained => {
                     self.outer_focused = Some(true);
                     outcome.query_host_appearance = true;
@@ -250,6 +258,7 @@ impl ClientShellState {
                 RawInputEvent::OuterFocusLost => {
                     outcome.repaint |= self.clear_link_hover();
                     self.outer_focused = Some(false);
+                    self.clear_workspace_double_clicks();
                     self.release_input_leases(&mut outcome);
                     outcome
                         .requests
@@ -349,6 +358,7 @@ impl ClientShellState {
     }
 
     fn release_input_leases(&mut self, outcome: &mut ClientShellInput) {
+        self.clear_input_source(LOCAL_INPUT_SOURCE);
         for lease in self.input_leases.remove_source(LOCAL_INPUT_SOURCE) {
             self.push_pane_key(
                 lease.target,

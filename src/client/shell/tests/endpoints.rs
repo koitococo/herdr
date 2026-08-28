@@ -338,6 +338,7 @@ fn machine_navigation_does_not_require_a_local_snapshot_or_surface() {
             .rect;
         let mut outcome = ClientShellInput::default();
         state.handle_mouse(
+            0,
             crossterm::event::MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
                 column: hit.x + 5,
