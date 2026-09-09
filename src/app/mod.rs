@@ -102,7 +102,6 @@ impl AppPolicy {
     };
 }
 
-
 pub struct App {
     pub state: AppState,
     pub(crate) pixel_mouse_available: bool,
@@ -1901,12 +1900,8 @@ mod tests {
         std::fs::write(&path, "[experimental]\nrefresh_rate = 0\n").unwrap();
         let report = app.reload_config();
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
-        assert!(report
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains(
-                "experimental.refresh_rate must be between 1 and 60 Hz"
-            )));
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic
+            .contains("experimental.refresh_rate must be between 1 and 60 Hz")));
         assert_eq!(app.render_interval, Duration::from_nanos(66_666_666));
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);

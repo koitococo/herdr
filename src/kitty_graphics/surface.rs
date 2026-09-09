@@ -210,6 +210,7 @@ impl GridPiece {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ClientState {
     scope: String,
+    scope_epoch: u64,
     scene: SurfaceGraphicsScene,
     display_scene: SurfaceGraphicsScene,
     native_image_ids: HashMap<SurfaceGraphicsAssetKey, u32>,
@@ -241,10 +242,15 @@ impl ClientState {
         &self.scope
     }
 
+    pub(crate) fn scope_epoch(&self) -> u64 {
+        self.scope_epoch
+    }
+
     pub(crate) fn set_scope(&mut self, scope: &str) {
         if self.scope == scope {
             return;
         }
+        self.scope_epoch = self.scope_epoch.saturating_add(1);
         self.scope = scope.to_owned();
         self.scene = SurfaceGraphicsScene::default();
         self.display_scene = SurfaceGraphicsScene::default();
@@ -1154,6 +1160,18 @@ mod tests {
             assets: vec![asset],
             retained_assets: Vec::new(),
         }
+    }
+    #[test]
+    fn scope_epoch_advances_only_when_scope_changes() {
+        let mut state = ClientState::default();
+        let initial = state.scope_epoch();
+        state.set_scope("endpoint-a:boot-1");
+        let first = state.scope_epoch();
+        assert!(first > initial);
+        state.set_scope("endpoint-a:boot-1");
+        assert_eq!(state.scope_epoch(), first);
+        state.set_scope("endpoint-b:boot-2");
+        assert!(state.scope_epoch() > first);
     }
 
     #[test]

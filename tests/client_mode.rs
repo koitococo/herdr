@@ -571,6 +571,7 @@ fn server_crash_after_attach_causes_lost_connection_error() {
                         || out.contains("workspace")
                         || out.contains("pane")
                         || out.contains("terminal")
+                        || out.to_ascii_lowercase().contains("spaces")
                     {
                         seen = true;
                         break;
@@ -890,6 +891,7 @@ fn attach_thin_client_with_config(
             || out.contains("workspace")
             || out.contains("pane")
             || out.contains("terminal")
+            || out.to_ascii_lowercase().contains("spaces")
         {
             attached = true;
             break;

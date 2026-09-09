@@ -181,7 +181,6 @@ impl App {
         )
     }
 
-
     fn plugin_pane_launch_env(
         &self,
         plugin: &InstalledPluginInfo,

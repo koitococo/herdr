@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
 use crate::detect::Agent;
 
 const MAX_SIDEBAR_ROWS: usize = 16;
@@ -139,6 +140,7 @@ pub enum SpaceSidebarToken {
 }
 
 impl AgentSidebarToken {
+    #[cfg(test)]
     pub(crate) fn style_for_value(&self, value: &str) -> Option<SidebarTokenStyle> {
         match self {
             Self::Styled { style, rules, .. } => rules::matching_style(rules, *style, value),
@@ -428,15 +430,6 @@ pub struct AgentsSidebarConfig {
     pub rows_by_agent: BTreeMap<String, AgentSidebarRows>,
     pub row_gap: u16,
 }
-
-impl AgentsSidebarConfig {
-    pub(crate) fn rows_for_agent(&self, agent: Option<Agent>) -> &AgentSidebarRows {
-        agent
-            .and_then(|agent| self.rows_by_agent.get(crate::detect::agent_label(agent)))
-            .unwrap_or(&self.rows)
-    }
-}
-
 
 impl Default for AgentsSidebarConfig {
     fn default() -> Self {
