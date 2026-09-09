@@ -701,13 +701,43 @@ impl ClientShellState {
             at: std::time::Instant::now(),
         };
         if self
+            .pending_endpoint_activation
+            .as_ref()
+            .is_some_and(|pending| pending.ne(&click.endpoint_id))
+        {
+            self.clear_workspace_double_click(source_id);
+        }
+        let double_click = self
             .last_workspace_clicks
             .get(&source_id)
-            .is_some_and(|previous| previous.is_double_click_for(&click))
-        {
+            .is_some_and(|previous| previous.is_double_click_for(&click));
+        if double_click {
             self.clear_workspace_double_click(source_id);
             self.workspace_press = None;
             self.chrome_drag = None;
+            let endpoint_id = click.endpoint_id.clone();
+            if self
+                .pending_endpoint_activation
+                .as_ref()
+                .is_some_and(|pending| pending == &endpoint_id)
+            {
+                if self.endpoint_is_online(&endpoint_id) {
+                    self.pending_workspace_rename_intents
+                        .insert(source_id, click);
+                    return true;
+                }
+                self.discard_endpoint_activation(&endpoint_id);
+                return false;
+            }
+            if self.pending_endpoint_activation.is_some() {
+                return false;
+            }
+            if click.endpoint_id != self.active_endpoint_id && self.endpoint_is_online(&endpoint_id)
+            {
+                self.pending_workspace_rename_intents
+                    .insert(source_id, click);
+                return true;
+            }
             if self.open_rename_workspace_overlay_for(&click.endpoint_id, click.workspace_id) {
                 outcome.repaint = true;
                 return true;

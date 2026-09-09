@@ -472,9 +472,10 @@ pub(super) fn render_expanded(
         hits.workspace_scrollbar = track;
         super::scroll::render_list_scrollbar(buffer, track, metrics, palette);
     }
-    if let Some(row) = state.workspace_drop_indicator_row.filter(|row| {
-        *row >= body.y && *row < body.bottom()
-    }) {
+    if let Some(row) = state
+        .workspace_drop_indicator_row
+        .filter(|row| *row >= body.y && *row < body.bottom())
+    {
         super::render::put_text(
             buffer,
             body.x,

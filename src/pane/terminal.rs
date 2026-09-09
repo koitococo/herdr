@@ -2904,26 +2904,33 @@ fn ghostty_recent_text_for_terminal(
     terminal: &crate::ghostty::Terminal,
     lines: usize,
 ) -> Result<String, crate::ghostty::Error> {
-    // A cleared viewport must stay empty even if scrollback precedes it. Only
-    // compensate for its trailing padding after proving the logical bottom
-    // viewport still contains output.
-    let viewport_rows = usize::from(terminal.rows()?);
-    let total_rows = terminal.total_rows()?;
-    let cols = terminal.cols()?;
-    let viewport_start = total_rows.saturating_sub(viewport_rows);
-    let mut viewport = Vec::with_capacity(viewport_rows);
-    for y in viewport_start..total_rows {
-        viewport.push(ghostty_screen_row(terminal, cols, y as u32)?);
-    }
-    trim_trailing_blank_rows(&mut viewport);
-    if viewport.is_empty() {
-        return Ok(String::new());
-    }
+    let requested_rows = if terminal.active_screen()? != crate::ghostty::ActiveScreen::Primary {
+        // Alternate-screen reads use the physical range directly. In
+        // particular, do not inspect the primary viewport: the alternate
+        // screen has its own physical-row semantics.
+        lines
+    } else {
+        // A cleared primary viewport must stay empty even if scrollback
+        // precedes it. Only compensate for its trailing padding after proving
+        // the logical bottom viewport still contains output.
+        let viewport_rows = usize::from(terminal.rows()?);
+        let total_rows = terminal.total_rows()?;
+        let cols = terminal.cols()?;
+        let viewport_start = total_rows.saturating_sub(viewport_rows);
+        let mut viewport = Vec::with_capacity(viewport_rows);
+        for y in viewport_start..total_rows {
+            viewport.push(ghostty_screen_row(terminal, cols, y as u32)?);
+        }
+        trim_trailing_blank_rows(&mut viewport);
+        if viewport.is_empty() {
+            return Ok(String::new());
+        }
 
-    // `total_rows` includes unoccupied viewport padding. Include that padding
-    // in the range before trimming it so a small recent limit still reaches
-    // the most recent terminal output.
-    let requested_rows = lines.saturating_add(viewport_rows);
+        // `total_rows` includes unoccupied viewport padding. Include that
+        // padding in the range before trimming it so a small recent limit
+        // still reaches the most recent terminal output.
+        lines.saturating_add(viewport_rows)
+    };
     let Some((start, end, cols)) = ghostty_recent_read_range(terminal, requested_rows)? else {
         return Ok(String::new());
     };

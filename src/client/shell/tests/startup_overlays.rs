@@ -558,7 +558,10 @@ fn config_diagnostic_offsets_only_the_pane_rows_it_overlaps() {
 
     state.compose(106, 20).expect("one-line frame");
     let pane_area = state.layout(106, 20).pane_surface;
-    assert_eq!(state.hits.notification_toast.y, pane_area.y);
+    assert_eq!(
+        state.hits.notification_toast.y,
+        pane_area.y.saturating_add(1)
+    );
     let targetless_hit = state.hits.notification_toast;
     state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -572,7 +575,10 @@ fn config_diagnostic_offsets_only_the_pane_rows_it_overlaps() {
     endpoint_snapshot.config_diagnostic = Some("first warning\nsecond warning".into());
     state.set_snapshot(Box::new(endpoint_snapshot));
     state.compose(106, 20).expect("two-line frame");
-    assert_eq!(state.hits.notification_toast.y, pane_area.y);
+    assert_eq!(
+        state.hits.notification_toast.y,
+        pane_area.y.saturating_add(1)
+    );
 
     state
         .visible_notification
@@ -656,7 +662,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
     state.set_snapshot(Box::new(endpoint_snapshot.clone()));
     state.set_pane_surface(surface());
     let shell = state.compose(106, 30).expect("shell frame");
-    assert_eq!(state.hits.global_launcher.width, 8);
+    assert_eq!(state.hits.global_launcher.width, 6);
     let launcher = state.hits.global_launcher;
     let shell_buffer = shell.to_ratatui_buffer().expect("shell buffer");
     let badge_x = launcher.right().saturating_sub(6);
@@ -666,7 +672,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
     );
     assert_eq!(
         shell_buffer[(badge_x + 2, launcher.y)].fg,
-        state.config.palette.overlay0
+        state.config.palette.accent
     );
 
     state.sidebar_collapsed = true;
@@ -871,7 +877,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
     installed_surface.projection_revision = 2;
     state.set_pane_surface(installed_surface);
     state.compose(106, 30).expect("installed shell");
-    assert_eq!(state.hits.global_launcher.width, 6);
+    assert_eq!(state.hits.global_launcher.width, 4);
     state.toggle_global_menu();
     let installed = state.compose(106, 30).expect("installed menu");
     let installed_text = installed
@@ -1024,7 +1030,7 @@ fn outdated_integration_badges_launcher_settings_and_settings_tab() {
     state.set_snapshot(Box::new(endpoint_snapshot));
     state.set_pane_surface(surface());
     let shell = state.compose(106, 30).expect("integration attention shell");
-    assert_eq!(state.hits.global_launcher.width, 8);
+    assert_eq!(state.hits.global_launcher.width, 6);
     let shell_text = shell
         .cells
         .iter()
@@ -1083,7 +1089,7 @@ fn combined_update_and_integration_attention_preserves_both_badges() {
     state.set_snapshot(Box::new(endpoint_snapshot));
     state.set_pane_surface(surface());
     state.compose(106, 30).expect("combined attention shell");
-    assert_eq!(state.hits.global_launcher.width, 8);
+    assert_eq!(state.hits.global_launcher.width, 6);
 
     state.toggle_global_menu();
     let menu = state.compose(106, 30).expect("combined attention menu");
@@ -1120,7 +1126,7 @@ fn current_release_notes_use_whats_new_without_attention_badge() {
     state.set_snapshot(Box::new(endpoint_snapshot));
     state.set_pane_surface(surface());
     state.compose(106, 30).expect("shell frame");
-    assert_eq!(state.hits.global_launcher.width, 6);
+    assert_eq!(state.hits.global_launcher.width, 4);
     state.toggle_global_menu();
     let menu = state.compose(106, 30).expect("what's new menu");
     let text = menu

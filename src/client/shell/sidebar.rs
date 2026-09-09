@@ -23,7 +23,12 @@ pub(in crate::client::shell) fn desktop_sidebar_geometry(
 ) -> DesktopSidebarGeometry {
     let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
     let toggle = if area.width > 1 && area.height > 0 {
-        Rect::new(area.right().saturating_sub(2), area.bottom().saturating_sub(1), 1, 1)
+        Rect::new(
+            area.right().saturating_sub(2),
+            area.bottom().saturating_sub(1),
+            1,
+            1,
+        )
     } else {
         Rect::default()
     };
@@ -62,12 +67,16 @@ pub(in crate::client::shell) fn desktop_sidebar_geometry(
     let menu_width = desired_menu_width.min(available_width);
     let menu_x = controls_right.saturating_sub(menu_width);
     let new_width = desired_new_width.min(menu_x.saturating_sub(content.x));
-    let new_workspace = (new_width > 0 && !footer.is_empty()).then(|| {
+    let new_workspace = if new_width > 0 && !footer.is_empty() {
         Rect::new(footer.x, footer.y, new_width, footer.height)
-    }).unwrap_or_default();
-    let global_launcher = (menu_width > 0 && !footer.is_empty()).then(|| {
+    } else {
+        Rect::default()
+    };
+    let global_launcher = if menu_width > 0 && !footer.is_empty() {
         Rect::new(menu_x, footer.y, menu_width, footer.height)
-    }).unwrap_or_default();
+    } else {
+        Rect::default()
+    };
 
     DesktopSidebarGeometry {
         content,
@@ -345,9 +354,10 @@ pub(crate) fn render_sidebar(
         super::scroll::render_list_scrollbar(buffer, track, metrics, palette);
     }
 
-    if let Some(row) = state.workspace_drop_indicator_row.filter(|row| {
-        *row >= body.y && *row < body.bottom()
-    }) {
+    if let Some(row) = state
+        .workspace_drop_indicator_row
+        .filter(|row| *row >= body.y && *row < body.bottom())
+    {
         put_text(
             buffer,
             body.x,

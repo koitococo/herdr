@@ -721,28 +721,24 @@ fn live_handoff_carries_more_panes_than_one_scm_rights_message() {
         .process_id()
         .expect("test server should expose pid");
 
-    let created = request(
+    assert_ok(request(
         &api_socket,
         serde_json::json!({
             "id": "test:workspace:create",
             "method": "workspace.create",
             "params": {"cwd": "/tmp", "focus": true}
         }),
-    );
-    let workspace_id = created["result"]["workspace"]["workspace_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    ));
 
-    // One pane per tab keeps the layout shallow, so this exercises the fd
+    // One pane per workspace keeps each layout shallow, so this exercises the fd
     // transfer rather than the depth of a single split tree.
     for index in 1..PANES {
         assert_ok(request(
             &api_socket,
             serde_json::json!({
-                "id": format!("test:tab:create-{index}"),
-                "method": "tab.create",
-                "params": {"workspace_id": workspace_id, "focus": false}
+                "id": format!("test:workspace:create-{index}"),
+                "method": "workspace.create",
+                "params": {"cwd": "/tmp", "focus": false}
             }),
         ));
     }

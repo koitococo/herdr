@@ -1,7 +1,6 @@
 # Changelog
 
 ## Unreleased
-- Desktop workspace cards can now be double-clicked to open the existing rename dialog without changing the workspace/API rename path.
 
 ## [0.9.1] - 2026-09-16
 
@@ -135,7 +134,7 @@
 - Optional `keys.move_tab_previous` and `keys.move_tab_next` bindings now reorder the active tab in place, wrapping at either end. (#2561, thanks @dhh)
 - Optional `keys.resize_pane_left`, `keys.resize_pane_down`, `keys.resize_pane_up`, and `keys.resize_pane_right` bindings now resize the focused pane in one keystroke without entering resize mode. (#2558, thanks @dhh)
 - Windows clients can now use `herdr --remote` to attach to Herdr servers on Linux and macOS. (#2329)
-- Devin CLI, Cursor Agent CLI, MastraCode, Hermes Agent, and Grok CLI integrations now install and run natively on Windows.
+- Cursor Agent CLI, MastraCode, Hermes Agent, and Grok CLI integrations now install and run natively on Windows.
 - Panes can now route normal right-click gestures to mouse-reporting applications through the pane menu, `herdr pane input`, `pane.input.set`, or the `pane split --right-click pane` launch option.
 - `ui.pane_outer_borders` can now keep or hide the outside edges of split-pane borders independently from internal dividers. (#2535, thanks @dhh)
 - `theme.custom.sidebar_bg` can now give the desktop sidebar its own background without changing built-in theme defaults.
@@ -143,16 +142,12 @@
 - Navigate-mode selection rows now use a dedicated per-theme cursor color, customizable via `theme.custom.selection_bg`, so the cursor stays distinguishable from the active Space and Agent highlight.
 - Copy mode now supports `B`, `E`, and `W` motions over whitespace-delimited big words. (#2270, thanks @jplew)
 - The plugin marketplace now discovers valid manifests at repository roots and subdirectories, groups multiple plugins under each repository, and publishes their versions and exact default-branch commits.
-- Added experimental `experimental.refresh_rate` (1–60 Hz, default 60) to cap local TUI and headless server redraw cadence.
 
 ### Changed
 - Windows support is now generally available through stable releases and uses the stable update channel by default. Existing preview installs stay on preview until explicitly switched.
 - Headless servers now use a configurable 120×40 virtual terminal instead of 80×24 when no client is attached, giving newly created panes a practical default size. (#2828)
 - Desktop tab labels are now centered in their tabs, so the active-tab highlight has symmetric padding. (#2570, thanks @dhh)
-- Bumped the client/server protocol version to 20 for pane terminal bell forwarding.
 - Experimental pane graphics now support bounded named layers, acknowledged full-RGBA primary-layer direct file frames on audited local terminals, owned BGRA fallback, exact pixel mouse input, and placement-only resize replay.
-- Desktop now shows Spaces across the full sidebar and no longer renders the tab bar or Agent sidebar. The mobile UI is unchanged. Desktop tab-bar and Agent-panel configuration remains accepted but has no UI effect.
-- Tab identity, `HERDR_TAB_ID`, `tab.list`, `tab.get`, and legacy snapshot restore remain available, but tab mutations and other multi-tab creation paths now return `multi_tab_unsupported` and direct users to workspaces.
 
 ### Fixed
 - Unix CLI commands now exit quietly when a downstream pipe closes instead of panicking with exit 101. (#2994)

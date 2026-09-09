@@ -35,7 +35,6 @@ use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const MIN_RENDER_INTERVAL: Duration = Duration::from_millis(16);
 const GIT_REMOTE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
 const GIT_REPO_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
@@ -100,7 +99,6 @@ impl AppPolicy {
         background_updates: true,
     };
 }
-
 
 pub struct App {
     pub state: AppState,
@@ -1803,12 +1801,8 @@ mod tests {
         std::fs::write(&path, "[experimental]\nrefresh_rate = 0\n").unwrap();
         let report = app.reload_config();
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
-        assert!(report
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains(
-                "experimental.refresh_rate must be between 1 and 60 Hz"
-            )));
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic
+            .contains("experimental.refresh_rate must be between 1 and 60 Hz")));
         assert_eq!(app.render_interval, Duration::from_nanos(66_666_666));
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);

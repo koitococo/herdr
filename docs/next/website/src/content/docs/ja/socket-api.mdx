@@ -174,7 +174,7 @@ CLI の `herdr api snapshot` は、クライアントやエージェントが簡
 
 レスポンスには `workspace_id`、`tab_id`、`zoomed`、`focused_pane_id`、`root` が含まれます。`root` は `pane` ノードと `split` ノードの BSP ツリーです。ペインノードは `pane_id`、`label`、`cwd`、argv の `command` を含められます。分割ノードは `direction` (`right` または `down`)、`ratio`、`first`、`second` を使います。
 
-`layout.apply` は宣言的なツリーから新しいタブを作成します。`tab_id` が与えられた場合、Herdr は先に置き換え用のタブを作成してから古いタブを閉じます。これは構造、ラベル、cwd、env、任意の argv コマンドを復元しますが、ライブの PTY、スクロールバック、実行中プロセスは保存しません。
+`layout.apply` は `tab_id` を使って既存の一意なタブを置き換えます。`tab_id` を省略したリクエスト、または別のタブを作成するリクエストは `multi_tab_unsupported` で拒否されます。これは構造、ラベル、cwd、env、任意の argv コマンドを復元しますが、ライブの PTY、スクロールバック、実行中プロセスは保存しません。
 
 ```json
 {
@@ -182,6 +182,7 @@ CLI の `herdr api snapshot` は、クライアントやエージェントが簡
   "method": "layout.apply",
   "params": {
     "workspace_id": "wabc",
+    "tab_id": "wabc:t1",
     "tab_label": "dev",
     "focus": true,
     "root": {

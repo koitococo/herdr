@@ -1,9 +1,12 @@
 use super::*;
 
 impl ClientShellState {
-    #[cfg(unix)]
     pub(crate) fn graphics_scope(&self) -> &str {
         self.graphics.scope()
+    }
+
+    pub(crate) fn graphics_scope_epoch(&self) -> u64 {
+        self.graphics.scope_epoch()
     }
 
     #[cfg(unix)]

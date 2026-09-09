@@ -32,6 +32,9 @@ pub(super) fn dispatch_client_shell_actions(
                 endpoint_id,
                 target,
             } => {
+                if let Some(shell) = shell.as_deref_mut() {
+                    shell.note_endpoint_activation_requested(&endpoint_id, target.as_ref());
+                }
                 *scheduled_activation = Some(ClientLoopEvent::ActivateEndpoint {
                     endpoint_id,
                     target,
@@ -216,6 +219,9 @@ pub(super) fn begin_endpoint_activation(
     now: std::time::Instant,
     scheduled_activation: &mut Option<ClientLoopEvent>,
 ) -> Result<(), ClientError> {
+    if let Some(shell) = state.shell.as_mut() {
+        shell.note_endpoint_activation_requested(&endpoint_id, target.as_ref());
+    }
     state.deferred_local_activation = None;
     if endpoint_id.is_local() && !local_activation_metadata_ready(state, endpoints) {
         state.deferred_local_activation = Some(endpoint::EndpointActivationIntent {
@@ -260,6 +266,7 @@ pub(super) fn begin_endpoint_activation(
             .is_some_and(|connection| connection.surface_active);
     if already_active {
         if let (Some(shell), Some(target)) = (state.shell.as_mut(), target) {
+            shell.discard_endpoint_activation(&endpoint_id);
             let actions = shell.focus_endpoint_target(target);
             let (_, repaint) = dispatch_client_shell_actions(
                 actions,
@@ -316,6 +323,7 @@ pub(super) fn begin_endpoint_activation(
         ),
         Err(endpoint::ActivationBeginError::Preflight(error)) => {
             if let Some(shell) = state.shell.as_mut() {
+                shell.discard_endpoint_activation(&endpoint_id);
                 shell.receive_endpoint_unavailable(format!(
                     "{}: {error}",
                     shell.endpoint_label(&endpoint_id)
@@ -365,6 +373,9 @@ pub(super) fn complete_endpoint_activation(
     if let Some(endpoint_id) = sync_endpoint.as_ref() {
         state.replay_host_theme(endpoints, endpoint_id);
     }
+    let activation_target = pending
+        .as_ref()
+        .map(|activation| activation.target().clone());
     let completion = {
         let Some(activation) = pending.as_mut() else {
             return Ok(None);
@@ -375,6 +386,9 @@ pub(super) fn complete_endpoint_activation(
         match activation.complete(shell, endpoints) {
             Ok(completion) => completion,
             Err(error) => {
+                if let Some(endpoint_id) = activation_target.as_ref() {
+                    shell.discard_endpoint_activation(endpoint_id);
+                }
                 shell.receive_endpoint_unavailable(error);
                 return Ok(None);
             }
@@ -413,6 +427,9 @@ pub(super) fn complete_endpoint_activation(
         return Ok(None);
     }
 
+    let completed_endpoint = matches!(&completion, endpoint::ActivationCompletion::Activated)
+        .then_some(activation_target)
+        .flatten();
     let _ = pending.take();
     endpoints.unfreeze_input();
     let successor = match completion {
@@ -433,6 +450,11 @@ pub(super) fn complete_endpoint_activation(
         | endpoint::ActivationCompletion::AwaitingPresentationEffects => unreachable!(),
     };
     state.unfreeze_presentation();
+    if let Some(endpoint_id) = completed_endpoint.as_ref() {
+        if let Some(shell) = state.shell.as_mut() {
+            shell.finish_endpoint_activation(endpoint_id);
+        }
+    }
     if successor.is_none() {
         let active_endpoint = endpoints.active_id().clone();
         let cancelled = endpoint_commands.send_next(&active_endpoint, endpoints);
@@ -487,10 +509,17 @@ pub(super) fn rollback_endpoint_activation(
     let Some(activation) = pending.as_mut() else {
         return;
     };
+    let activation_target = activation.target().clone();
+    if let Some(shell) = state.shell.as_mut() {
+        shell.discard_endpoint_activation(&activation_target);
+    }
     match activation.rollback(endpoints, error.clone(), source_release_rejected) {
         endpoint::ActivationRollback::Pending => state.freeze_presentation(),
         endpoint::ActivationRollback::Unavailable(message) => {
             *pending = None;
+            if let Some(shell) = state.shell.as_mut() {
+                shell.discard_pending_endpoint_activation();
+            }
             // No endpoint has been proven safe to present. Keep pane input frozen, but render
             // the client-owned unavailable chrome rather than silently swallowing the error.
             present_handoff_unavailable(state, message);
@@ -528,6 +557,9 @@ pub(super) fn handle_endpoint_disconnect(
             endpoint::ActivationRollback::Pending => {}
             endpoint::ActivationRollback::Unavailable(error) => {
                 *pending_activation = None;
+                if let Some(shell) = state.shell.as_mut() {
+                    shell.discard_pending_endpoint_activation();
+                }
                 present_handoff_unavailable(state, error);
             }
         }
@@ -587,6 +619,9 @@ pub(super) fn handle_endpoint_attention(
             );
         if let endpoint::ActivationRollback::Unavailable(error) = outcome {
             *pending_activation = None;
+            if let Some(shell) = state.shell.as_mut() {
+                shell.discard_pending_endpoint_activation();
+            }
             present_handoff_unavailable(state, error);
         }
     }
@@ -596,6 +631,7 @@ pub(super) fn handle_endpoint_attention(
         for request_id in cancelled {
             shell.cancel_endpoint_request(&request_id);
         }
+        shell.discard_endpoint_activation(endpoint_id);
         shell.set_endpoint_status(endpoint_id, endpoint::ClientEndpointStatus::Attention);
         endpoint_was_active.then(|| format!("{}: {message}", shell.endpoint_label(endpoint_id)))
     });

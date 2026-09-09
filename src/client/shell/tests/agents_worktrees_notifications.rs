@@ -77,15 +77,13 @@ fn workspace_double_click_renames_the_exact_card_through_existing_action() {
         modifiers: KeyModifiers::empty(),
     };
 
-    let first_down =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(MouseEventKind::Down(
-            MouseButton::Left,
-        )))]);
+    let first_down = state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+    ))]);
     assert!(first_down.actions.is_empty());
-    let first_up =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(MouseEventKind::Up(
-            MouseButton::Left,
-        )))]);
+    let first_up = state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(MouseEventKind::Up(
+        MouseButton::Left,
+    )))]);
     assert!(matches!(
         first_up.actions.as_slice(),
         [ClientShellAction::Endpoint { request, .. }]
@@ -96,10 +94,9 @@ fn workspace_double_click_renames_the_exact_card_through_existing_action() {
             )
     ));
 
-    let second_down =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(MouseEventKind::Down(
-            MouseButton::Left,
-        )))]);
+    let second_down = state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+    ))]);
     assert!(second_down.repaint);
     assert!(matches!(
         state.overlay,
@@ -558,44 +555,6 @@ fn desktop_spaces_shell_omits_agent_detail_hits() {
     assert_eq!(state.hits.agent_body, Rect::default());
     assert_eq!(state.hits.agent_scrollbar, Rect::default());
     assert_eq!(state.hits.agent_sort_toggle, Rect::default());
-}
-
-#[test]
-fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
-    let mut projected = snapshot();
-    projected.tabs[0].label = "second".into();
-    projected.tabs[0].custom_label = true;
-    projected.agents = vec![ClientShellAgent {
-        pane_id: "pane_1".into(),
-        workspace_id: "ws_1".into(),
-        tab_id: "tab_1".into(),
-        name: Some("reviewer".into()),
-        display_agent: None,
-        agent: Some("pi".into()),
-        title: None,
-        terminal_title: None,
-        terminal_title_stripped: None,
-        agent_status: AgentStatus::Working,
-        state_change_seq: 1,
-        state_labels: Vec::new(),
-        tokens: Vec::new(),
-        focused: true,
-    }];
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(projected));
-    state.set_pane_surface(surface());
-    let frame = state.compose(106, 30).expect("agent sidebar frame");
-    let row = state.hits.agents.first().expect("agent row hit").0;
-    let buffer = frame.to_ratatui_buffer().expect("agent sidebar buffer");
-
-    for (label, needle) in [("tab", "second"), ("agent", "reviewer"), ("separator", "·")] {
-        let (x, y) = cell_symbol_position(&frame, row, needle);
-        let cell = buffer.cell((x, y)).expect("muted sidebar cell");
-        assert!(
-            !cell.modifier.contains(Modifier::DIM),
-            "{label} cell at ({x},{y}) should not stack terminal faint: {cell:?}"
-        );
-    }
 }
 
 #[test]

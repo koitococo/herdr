@@ -162,6 +162,12 @@ fn test_frame(width: u16) -> FrameData {
     }
 }
 
+fn test_frame_with_graphics(width: u16, graphics: &[u8]) -> FrameData {
+    let mut frame = test_frame(width);
+    frame.graphics.extend_from_slice(graphics);
+    frame
+}
+
 #[test]
 fn client_refresh_interval_from_env_is_none_when_missing() {
     let _guard = env_lock().lock().unwrap();
@@ -180,7 +186,11 @@ fn client_refresh_interval_from_env_accepts_only_ascii_hertz_in_range() {
         ("60", Duration::from_nanos(16_666_666)),
     ] {
         let _env = EnvVarGuard::set(CLIENT_REFRESH_RATE_ENV_VAR, value);
-        assert_eq!(client_refresh_interval_from_env(), Some(expected), "{value}");
+        assert_eq!(
+            client_refresh_interval_from_env(),
+            Some(expected),
+            "{value}"
+        );
     }
 }
 
@@ -238,6 +248,169 @@ fn semantic_frame_pacer_clear_discards_previous_endpoint_frame() {
         pacer.submit(target.clone(), start + Duration::from_millis(10)),
         Some(target)
     );
+}
+
+#[test]
+fn semantic_frame_pacer_preserves_queued_graphics_across_due_and_clear() {
+    let interval = Duration::from_millis(100);
+    let start = Instant::now();
+    let scope = Some(1_u64);
+    let mut pacer = SemanticFramePacer::new(interval);
+
+    let first = test_frame_with_graphics(1, b"base");
+    assert_eq!(
+        pacer.submit_scoped(first.clone(), start, scope),
+        Some(first)
+    );
+    assert_eq!(
+        pacer.submit_scoped(
+            test_frame_with_graphics(2, b"first-graphics"),
+            start + Duration::from_millis(10),
+            scope,
+        ),
+        None
+    );
+    assert_eq!(
+        pacer.submit_scoped(
+            test_frame_with_graphics(3, b"second-graphics"),
+            start + Duration::from_millis(20),
+            scope,
+        ),
+        None
+    );
+    let presented = pacer
+        .present_due_scoped(start + interval, scope)
+        .expect("queued frame is due");
+    assert_eq!(presented.width, 3);
+    assert_eq!(presented.graphics, b"first-graphicssecond-graphics");
+
+    assert_eq!(
+        pacer.submit_scoped(
+            test_frame_with_graphics(4, b"queued-graphics"),
+            start + interval + Duration::from_millis(10),
+            scope,
+        ),
+        None
+    );
+
+    assert!(pacer.queue_graphics(b"direct-cleanup", scope, false));
+    let due = pacer
+        .submit_scoped(
+            test_frame_with_graphics(5, b"due-graphics"),
+            start + Duration::from_millis(200),
+            scope,
+        )
+        .expect("a frame arriving at its deadline is presented");
+    assert_eq!(due.width, 5);
+    assert_eq!(due.graphics, b"queued-graphicsdirect-cleanupdue-graphics");
+
+    assert_eq!(
+        pacer.submit_scoped(
+            test_frame_with_graphics(6, b"clear-journal"),
+            start + Duration::from_millis(210),
+            scope,
+        ),
+        None
+    );
+    pacer.clear();
+    assert_eq!(pacer.presentation_deadline(), None);
+    assert!(pacer.queue_graphics(b"frozen-cleanup", scope, true));
+    let fresh = pacer
+        .submit_scoped(
+            test_frame_with_graphics(7, b"fresh-graphics"),
+            start + Duration::from_millis(210),
+            scope,
+        )
+        .expect("clear permits the next frame to present");
+    assert_eq!(fresh.graphics, b"clear-journalfrozen-cleanupfresh-graphics");
+
+    assert_eq!(
+        pacer.submit_scoped(
+            test_frame_with_graphics(8, b"old-scope-graphics"),
+            start + Duration::from_millis(220),
+            scope,
+        ),
+        None
+    );
+    let old_scope_graphics = pacer
+        .take_scope_mismatch_graphics(Some(2_u64))
+        .expect("scope transition exposes old cleanup before discard");
+    assert_eq!(old_scope_graphics, b"old-scope-graphics");
+    pacer.clear();
+    let new_scope = pacer
+        .submit_scoped(
+            test_frame_with_graphics(9, b"new-scope-graphics"),
+            start + Duration::from_millis(220),
+            Some(2_u64),
+        )
+        .expect("a scope change discards the old journal");
+    assert_eq!(new_scope.graphics, b"new-scope-graphics");
+}
+
+#[test]
+fn client_refresh_rate_combines_config_and_env_and_reloads_pending_presentation() {
+    let _config_guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _env_guard = env_lock().lock().unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "herdr-client-refresh-rate-reload-{}-{}.toml",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let path_string = path.to_string_lossy().to_string();
+    let _config_path = EnvVarGuard::set(crate::config::CONFIG_PATH_ENV_VAR, &path_string);
+    let _env_rate = EnvVarGuard::set(CLIENT_REFRESH_RATE_ENV_VAR, "30");
+    let mut sound_config = crate::config::SoundConfig::default();
+    let mut redraw_on_focus_gained = false;
+    let mut draw_host_cursor = false;
+    let mut remote_image_paste_key = None;
+    let mut mouse_capture = false;
+
+    std::fs::write(&path, "[experimental]\nrefresh_rate = 15\n").unwrap();
+    let env_interval = client_refresh_interval_from_env();
+    let interval = reload_local_client_config(
+        &mut sound_config,
+        &mut redraw_on_focus_gained,
+        &mut draw_host_cursor,
+        &mut remote_image_paste_key,
+        &mut mouse_capture,
+        env_interval,
+    )
+    .expect("valid experimental config");
+    assert_eq!(interval, Duration::from_nanos(66_666_666));
+
+    let start = Instant::now();
+    let mut pacer = SemanticFramePacer::new(interval);
+    assert_eq!(pacer.submit(test_frame(1), start), Some(test_frame(1)));
+    let latest = test_frame(2);
+    assert_eq!(
+        pacer.submit(latest.clone(), start + Duration::from_millis(1)),
+        None
+    );
+    assert_eq!(pacer.presentation_deadline(), Some(start + interval));
+
+    std::fs::write(&path, "[experimental]\nrefresh_rate = 60\n").unwrap();
+    let updated_interval = reload_local_client_config(
+        &mut sound_config,
+        &mut redraw_on_focus_gained,
+        &mut draw_host_cursor,
+        &mut remote_image_paste_key,
+        &mut mouse_capture,
+        env_interval,
+    )
+    .expect("updated experimental config");
+    assert_eq!(updated_interval, Duration::from_nanos(33_333_333));
+    pacer.update_interval(updated_interval);
+    assert_eq!(
+        pacer.presentation_deadline(),
+        Some(start + updated_interval)
+    );
+    assert_eq!(pacer.present_due(start + updated_interval), Some(latest));
+    assert_eq!(pacer.presentation_deadline(), None);
+
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -780,12 +953,13 @@ fn reload_local_client_config_refreshes_local_client_presentation_state() {
     let mut remote_image_paste_key = None;
     let mut mouse_capture = true;
 
-    reload_local_client_config(
+    let _ = reload_local_client_config(
         &mut sound_config,
         &mut redraw_on_focus_gained,
         &mut draw_host_cursor,
         &mut remote_image_paste_key,
         &mut mouse_capture,
+        None,
     );
 
     assert!(!redraw_on_focus_gained);
@@ -814,12 +988,13 @@ fn reload_local_client_config_keeps_ui_preferences_when_ui_is_invalid() {
     let mut remote_image_paste_key = None;
     let mut mouse_capture = false;
 
-    reload_local_client_config(
+    let _ = reload_local_client_config(
         &mut sound_config,
         &mut redraw_on_focus_gained,
         &mut draw_host_cursor,
         &mut remote_image_paste_key,
         &mut mouse_capture,
+        None,
     );
 
     assert!(!mouse_capture);

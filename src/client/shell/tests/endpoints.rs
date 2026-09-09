@@ -16,6 +16,55 @@ fn remote_profile() -> SavedSshEndpoint {
         enabled: true,
     }
 }
+struct ActivationTestTransport;
+
+impl crate::client::endpoint::EndpointTransport for ActivationTestTransport {
+    fn send(&mut self, _: &crate::protocol::ClientMessage) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn activation_negotiation() -> crate::client::endpoint::EndpointNegotiation {
+    crate::client::endpoint::EndpointNegotiation::new(
+        vec!["client_shell.surface.set".into()],
+        vec![
+            crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY.into(),
+            crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY.into(),
+        ],
+    )
+}
+
+fn activation_surface_success(id: &str, active: bool, revision: u64) -> Vec<u8> {
+    serde_json::to_vec(&crate::api::schema::SuccessResponse {
+        id: id.into(),
+        result: crate::api::schema::ResponseResult::ClientShellSurfaceSet {
+            active,
+            projection_revision: revision,
+        },
+    })
+    .unwrap()
+}
+
+fn activation_workspace_focus_success(id: &str, workspace_id: &str) -> Vec<u8> {
+    serde_json::to_vec(&crate::api::schema::SuccessResponse {
+        id: id.into(),
+        result: crate::api::schema::ResponseResult::WorkspaceInfo {
+            workspace: crate::api::schema::WorkspaceInfo {
+                workspace_id: workspace_id.into(),
+                number: 1,
+                label: workspace_id.into(),
+                focused: true,
+                pane_count: 1,
+                tab_count: 1,
+                active_tab_id: "tab_1".into(),
+                agent_status: crate::api::schema::AgentStatus::Unknown,
+                tokens: Default::default(),
+                worktree: None,
+            },
+        },
+    })
+    .unwrap()
+}
 
 fn agent(
     name: &str,
@@ -40,24 +89,6 @@ fn agent(
     }
 }
 
-fn current_workspace_view() -> crate::api::schema::AgentViewSetParams {
-    use crate::api::schema::{
-        AgentViewBuiltinField, AgentViewContext, AgentViewField, AgentViewFilter, AgentViewValue,
-    };
-
-    crate::api::schema::AgentViewSetParams {
-        source: "example.views".into(),
-        label: Some("current space".into()),
-        filter: Some(AgentViewFilter::Eq {
-            field: AgentViewField::Builtin(AgentViewBuiltinField::WorkspaceId),
-            value: AgentViewValue::Context {
-                context: AgentViewContext::CurrentWorkspaceId,
-            },
-        }),
-        sort: Vec::new(),
-    }
-}
-
 fn state_with_remote() -> (ClientShellState, ClientEndpointId) {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     let profile = remote_profile();
@@ -73,144 +104,464 @@ fn state_with_remote() -> (ClientShellState, ClientEndpointId) {
     (state, endpoint_id)
 }
 
-fn state_with_scrollable_agents() -> (ClientShellState, ClientEndpointId) {
+#[test]
+fn inactive_remote_workspace_double_click_survives_endpoint_activation() {
     let (mut state, remote) = state_with_remote();
-    for endpoint_id in [ClientEndpointId::Local, remote.clone()] {
-        let mut projection = state
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.endpoint_id == endpoint_id)
-            .unwrap()
-            .snapshot
-            .clone()
-            .unwrap();
-        projection.agents = (0..8)
-            .map(|index| ClientShellAgent {
-                pane_id: format!("pane_{}", index + 1),
-                focused: index == 0,
-                ..agent(&format!("agent {index}"), AgentStatus::Idle, 1)
-            })
-            .collect();
-        projection.panes = projection
-            .agents
-            .iter()
-            .map(|agent| ClientShellPane {
-                pane_id: agent.pane_id.clone(),
-                focused: agent.focused,
-                ..projection.panes[0].clone()
-            })
-            .collect();
-        state.set_endpoint_snapshot(&endpoint_id, projection);
-    }
-    state.compose(100, 28).unwrap();
-    state.agent_scroll = 6;
-    state.compose(100, 28).unwrap();
-    assert_eq!(state.agent_scroll, 6);
-    (state, remote)
-}
+    state.compose(100, 28).expect("aggregate workspace sidebar");
+    let first_card = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.endpoint_id == remote && hit.workspace_id == "ws_1")
+        .expect("remote workspace card")
+        .rect;
+    let mouse = |kind, rect: ratatui::layout::Rect| crossterm::event::MouseEvent {
+        kind,
+        column: rect.x + 2,
+        row: rect.y,
+        modifiers: KeyModifiers::empty(),
+    };
 
-#[test]
-fn switching_machines_preserves_aggregate_agent_scroll_and_visible_rows() {
-    let (mut state, remote) = state_with_scrollable_agents();
-    for endpoint_id in [remote.clone(), ClientEndpointId::Local, remote] {
-        let visible = state.hits.endpoint_agents.clone();
-        let (rect, _, pane_id) = visible
-            .iter()
-            .find(|(_, endpoint, _)| endpoint == &endpoint_id)
-            .expect("destination agent remains visible");
-        let click = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: rect.x + 2,
-            row: rect.y,
-            modifiers: KeyModifiers::NONE,
-        })]);
-        assert!(matches!(
-            click.actions.as_slice(),
-            [ClientShellAction::ActivateEndpoint {
-                endpoint_id: target,
-                target: Some(ClientEndpointFocusTarget::Pane(target_pane)),
-            }] if target == &endpoint_id && target_pane == pane_id
-        ));
+    state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        first_card,
+    ))]);
+    let focused = state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        first_card,
+    ))]);
+    assert!(matches!(
+        focused.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Workspace(workspace_id)),
+        }] if endpoint_id == &remote && workspace_id == "ws_1"
+    ));
 
-        state.workspace_scroll = 3;
-        state.tab_scroll = 2;
-        assert!(state.activate_endpoint_projection(&endpoint_id));
-        assert_eq!(state.agent_scroll, 6);
-        assert_eq!(state.workspace_scroll, 0);
-        assert_eq!(state.tab_scroll, 0);
-        assert!(state.pane_surface.is_none());
-
-        let mut next_surface = surface();
-        next_surface.boot_id = state.endpoint_boot_id(&endpoint_id).unwrap().into();
-        state.set_pane_surface(next_surface);
-        state.compose(100, 28).unwrap();
-        assert_eq!(state.agent_scroll, 6);
-        assert_eq!(state.hits.endpoint_agents, visible);
-    }
-}
-
-#[test]
-fn local_agent_click_can_cancel_a_pending_remote_switch() {
-    for reconnecting in [false, true] {
-        let (mut state, remote) = state_with_scrollable_agents();
-        assert!(state.activate_endpoint(remote, &mut ClientShellInput::default()));
-        if reconnecting {
-            state.mark_endpoint_disconnected(&ClientEndpointId::Local);
-        }
-        state.compose(100, 28).unwrap();
-        let (rect, _, pane_id) = state
-            .hits
-            .endpoint_agents
-            .iter()
-            .find(|(_, endpoint, _)| endpoint.is_local())
-            .unwrap()
-            .clone();
-        let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: rect.x + 2,
-            row: rect.y,
-            modifiers: KeyModifiers::NONE,
-        })]);
-        assert!(
-            matches!(outcome.actions.as_slice(), [ClientShellAction::ActivateEndpoint {
-            endpoint_id: ClientEndpointId::Local,
-            target: Some(ClientEndpointFocusTarget::Pane(target)),
-        }] if target == &pane_id)
-        );
-    }
-}
-
-#[test]
-fn aggregate_agent_scroll_still_clamps_when_rows_shrink_on_activation() {
-    let (mut state, remote) = state_with_scrollable_agents();
-    for endpoint_id in [ClientEndpointId::Local, remote.clone()] {
-        let mut projection = state
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.endpoint_id == endpoint_id)
-            .unwrap()
-            .snapshot
-            .clone()
-            .unwrap();
-        projection.revision += 1;
-        projection.agents.truncate(1);
-        state.set_endpoint_snapshot(&endpoint_id, projection);
-    }
     assert!(state.activate_endpoint_projection(&remote));
-    state.compose(100, 28).unwrap();
-    assert_eq!(state.agent_scroll, 0);
-    assert_eq!(state.hits.agent_max_scroll, 0);
-    assert_eq!(state.hits.endpoint_agents.len(), 2);
+    let mut remote_surface = surface();
+    remote_surface.boot_id = "remote-boot".into();
+    state.set_pane_surface(remote_surface);
+    state
+        .compose(100, 28)
+        .expect("active remote workspace sidebar");
+    let second_card = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.endpoint_id == remote && hit.workspace_id == "ws_1")
+        .expect("active remote workspace card")
+        .rect;
+    let second_down = state.handle_raw_events(vec![RawInputEvent::Mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        second_card,
+    ))]);
+    assert!(second_down.repaint);
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+            target: ClientRenameTarget::Workspace { ref workspace_id },
+            ..
+        })) if workspace_id == "ws_1" && state.active_endpoint_id == remote
+    ));
+}
+#[test]
+fn pending_workspace_rename_requires_current_focused_workspace() {
+    let (mut state, remote) = state_with_remote();
+    assert!(state.activate_endpoint_projection(&remote));
+    let mut remote_surface = surface();
+    remote_surface.boot_id = "remote-boot".into();
+    state.set_pane_surface(remote_surface);
+
+    let mut wrong_focus = state.snapshot.as_deref().expect("remote snapshot").clone();
+    wrong_focus.focused_workspace_id = Some("ws_2".into());
+    state.set_endpoint_snapshot(&remote, Box::new(wrong_focus));
+    let target = ClientEndpointFocusTarget::Workspace("ws_1".into());
+    state.note_endpoint_activation_requested(&remote, Some(&target));
+    state.pending_workspace_rename_intents.insert(
+        7,
+        ClientWorkspaceClick {
+            endpoint_id: remote.clone(),
+            workspace_id: "ws_1".into(),
+            at: std::time::Instant::now(),
+        },
+    );
+
+    assert!(!state.finish_endpoint_activation(&remote));
+    assert!(state.overlay.is_none());
+    assert!(state.pending_workspace_rename_intents.is_empty());
+}
+#[test]
+fn endpoint_retarget_filters_workspace_candidates_by_target() {
+    let (mut state, remote) = state_with_remote();
+    let stale = ClientWorkspaceClick {
+        endpoint_id: remote.clone(),
+        workspace_id: "ws_1".into(),
+        at: std::time::Instant::now(),
+    };
+    let current = ClientWorkspaceClick {
+        endpoint_id: remote.clone(),
+        workspace_id: "ws_2".into(),
+        at: std::time::Instant::now(),
+    };
+    state.last_workspace_clicks.insert(3, stale.clone());
+    state.last_workspace_clicks.insert(4, current.clone());
+    state.pending_workspace_rename_intents.insert(3, stale);
+    state.pending_workspace_rename_intents.insert(4, current);
+
+    let workspace_target = ClientEndpointFocusTarget::Workspace("ws_2".into());
+    state.note_endpoint_activation_requested(&remote, Some(&workspace_target));
+    assert!(!state.last_workspace_clicks.contains_key(&3));
+    assert!(state.last_workspace_clicks.contains_key(&4));
+    assert!(!state.pending_workspace_rename_intents.contains_key(&3));
+    assert!(state.pending_workspace_rename_intents.contains_key(&4));
+
+    let tab_target = ClientEndpointFocusTarget::Tab("tab_1".into());
+    state.note_endpoint_activation_requested(&remote, Some(&tab_target));
+    assert!(state.last_workspace_clicks.is_empty());
+    assert!(state.pending_workspace_rename_intents.is_empty());
+}
+#[test]
+fn failed_remote_activation_clears_candidate_before_retry() {
+    let (mut state, remote) = state_with_remote();
+    state.compose(100, 28).expect("aggregate workspace sidebar");
+    let card = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.endpoint_id == remote && hit.workspace_id == "ws_1")
+        .expect("remote workspace card")
+        .rect;
+    let mouse = |kind| crossterm::event::MouseEvent {
+        kind,
+        column: card.x + 2,
+        row: card.y,
+        modifiers: KeyModifiers::empty(),
+    };
+
+    state.handle_raw_events_from_input_source(
+        12,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Down(
+            MouseButton::Left,
+        )))],
+    );
+    let first_up = state.handle_raw_events_from_input_source(
+        12,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Up(
+            MouseButton::Left,
+        )))],
+    );
+    assert!(matches!(
+        first_up.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Workspace(workspace_id)),
+        }] if endpoint_id == &remote && workspace_id == "ws_1"
+    ));
+
+    let target = ClientEndpointFocusTarget::Workspace("ws_1".into());
+    state.note_endpoint_activation_requested(&remote, Some(&target));
+    state.discard_endpoint_activation(&remote);
+    assert!(state
+        .last_workspace_clicks
+        .values()
+        .all(|click| click.endpoint_id != remote));
+
+    let retry_down = state.handle_raw_events_from_input_source(
+        12,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Down(
+            MouseButton::Left,
+        )))],
+    );
+    assert!(retry_down.actions.is_empty());
+    assert!(state.workspace_press.is_some());
+    let retry_up = state.handle_raw_events_from_input_source(
+        12,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Up(
+            MouseButton::Left,
+        )))],
+    );
+    assert!(matches!(
+        retry_up.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Workspace(workspace_id)),
+        }] if endpoint_id == &remote && workspace_id == "ws_1"
+    ));
 }
 
 #[test]
-fn same_machine_reboot_still_resets_agent_scroll() {
-    let (mut state, _) = state_with_scrollable_agents();
-    let mut projection = state.snapshot.clone().unwrap();
-    projection.boot_id = "restarted-local".into();
-    state.cache_endpoint_snapshot(&ClientEndpointId::Local, projection);
-    assert!(state.activate_endpoint_projection(&ClientEndpointId::Local));
-    assert_eq!(state.agent_scroll, 0);
+fn inactive_remote_workspace_double_click_queues_during_in_flight_activation() {
+    let (mut state, remote) = state_with_remote();
+    state.compose(100, 28).expect("aggregate workspace sidebar");
+    let first_card = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.endpoint_id == remote && hit.workspace_id == "ws_1")
+        .expect("remote workspace card")
+        .rect;
+    let mouse = |kind| crossterm::event::MouseEvent {
+        kind,
+        column: first_card.x + 2,
+        row: first_card.y,
+        modifiers: KeyModifiers::empty(),
+    };
+
+    state.handle_raw_events_from_input_source(
+        9,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Down(
+            MouseButton::Left,
+        )))],
+    );
+    let focused = state.handle_raw_events_from_input_source(
+        9,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Up(
+            MouseButton::Left,
+        )))],
+    );
+    let [ClientShellAction::ActivateEndpoint {
+        endpoint_id,
+        target: Some(ClientEndpointFocusTarget::Workspace(workspace_id)),
+    }] = focused.actions.as_slice()
+    else {
+        panic!("inactive remote click should start endpoint activation");
+    };
+    assert_eq!(endpoint_id, &remote);
+    assert_eq!(workspace_id, "ws_1");
+
+    let mut endpoints = crate::client::endpoint::EndpointRegistry::new(
+        ActivationTestTransport,
+        1,
+        activation_negotiation(),
+    );
+    endpoints.insert(
+        remote.clone(),
+        ActivationTestTransport,
+        7,
+        activation_negotiation(),
+        false,
+    );
+    let mut endpoint_commands = crate::client::endpoint_commands::EndpointCommands::default();
+    let mut scheduled_activation = None;
+    let (replay, repaint) = crate::client::shell_runtime::dispatch_client_shell_actions(
+        focused.actions,
+        &mut endpoint_commands,
+        &mut endpoints,
+        Some(&mut state),
+        &mut Vec::new(),
+        &mut scheduled_activation,
+    )
+    .expect("activation action dispatch");
+    assert!(replay.is_empty());
+    assert!(!repaint);
+
+    let second_down = state.handle_raw_events_from_input_source(
+        9,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Down(
+            MouseButton::Left,
+        )))],
+    );
+    assert!(second_down.actions.is_empty());
+    assert!(!second_down.repaint);
+    assert!(state.workspace_press.is_none());
+    assert!(matches!(
+        state.pending_workspace_rename_intents.get(&9),
+        Some(click) if click.endpoint_id == remote && click.workspace_id == "ws_1"
+    ));
+    let mut unrelated_profile = remote_profile();
+    unrelated_profile.id = ProfileId::parse("fedcba9876543210fedcba9876543210").unwrap();
+    let unrelated = ClientEndpointId::Ssh(unrelated_profile.id.clone());
+    state.set_endpoint_catalog(&[remote_profile(), unrelated_profile]);
+    state.set_endpoint_status(&unrelated, ClientEndpointStatus::Online);
+    state.mark_endpoint_disconnected(&unrelated);
+    assert_eq!(state.pending_endpoint_activation.as_ref(), Some(&remote));
+    assert!(matches!(
+        state.pending_workspace_rename_intents.get(&9),
+        Some(click) if click.endpoint_id == remote && click.workspace_id == "ws_1"
+    ));
+    let other_source_click = ClientWorkspaceClick {
+        endpoint_id: remote.clone(),
+        workspace_id: "ws_1".into(),
+        at: std::time::Instant::now(),
+    };
+    state
+        .last_workspace_clicks
+        .insert(10, other_source_click.clone());
+    state
+        .pending_workspace_rename_intents
+        .insert(10, other_source_click);
+
+    let source_card = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.endpoint_id == ClientEndpointId::Local && hit.workspace_id == "ws_1")
+        .expect("source workspace card")
+        .rect;
+    let source_mouse = |kind| crossterm::event::MouseEvent {
+        kind,
+        column: source_card.x + 2,
+        row: source_card.y,
+        modifiers: KeyModifiers::empty(),
+    };
+    let source_down = state.handle_raw_events_from_input_source(
+        9,
+        vec![RawInputEvent::Mouse(source_mouse(MouseEventKind::Down(
+            MouseButton::Left,
+        )))],
+    );
+    assert!(source_down.actions.is_empty());
+    assert!(!state.pending_workspace_rename_intents.contains_key(&9));
+    assert!(matches!(
+        state.pending_workspace_rename_intents.get(&10),
+        Some(click) if click.endpoint_id == remote && click.workspace_id == "ws_1"
+    ));
+    assert!(state.last_workspace_clicks.contains_key(&10));
+    let source_up = state.handle_raw_events_from_input_source(
+        9,
+        vec![RawInputEvent::Mouse(source_mouse(MouseEventKind::Up(
+            MouseButton::Left,
+        )))],
+    );
+    assert!(state.workspace_press.is_none());
+    assert!(!source_up.actions.is_empty());
+
+    let second_up = state.handle_raw_events_from_input_source(
+        9,
+        vec![RawInputEvent::Mouse(mouse(MouseEventKind::Up(
+            MouseButton::Left,
+        )))],
+    );
+    assert!(second_up.actions.is_empty());
+
+    let resize = ClientMessage::ClientShellResize {
+        cell_width_px: 8,
+        cell_height_px: 16,
+        surface_size: ClientSurfaceSize { cols: 4, rows: 2 },
+        pixel_mouse: false,
+    };
+    let mut activation = crate::client::endpoint::PendingEndpointActivation::begin(
+        &state,
+        &mut endpoints,
+        remote.clone(),
+        Some(ClientEndpointFocusTarget::Workspace("ws_1".into())),
+        resize,
+        3,
+        std::time::Instant::now(),
+    )
+    .expect("real in-flight endpoint activation");
+    assert_eq!(
+        activation.receive_response(
+            &ClientEndpointId::Local,
+            1,
+            "client-shell-surface:3:off",
+            &activation_surface_success("client-shell-surface:3:off", false, 1),
+            &mut endpoints,
+        ),
+        crate::client::endpoint::SurfaceActivationProgress::Pending
+    );
+    assert_eq!(
+        activation.receive_response(
+            &remote,
+            7,
+            "client-shell-surface:3:on",
+            &activation_surface_success("client-shell-surface:3:on", true, 1),
+            &mut endpoints,
+        ),
+        crate::client::endpoint::SurfaceActivationProgress::Pending
+    );
+    assert_eq!(
+        activation.receive_response(
+            &remote,
+            7,
+            "client-shell-focus:3:1",
+            &activation_workspace_focus_success("client-shell-focus:3:1", "ws_1"),
+            &mut endpoints,
+        ),
+        crate::client::endpoint::SurfaceActivationProgress::Pending
+    );
+    let target_snapshot = state
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.endpoint_id == remote)
+        .and_then(|endpoint| endpoint.snapshot.clone())
+        .expect("cached target snapshot");
+    assert_eq!(
+        activation.receive_snapshot(&remote, 7, &target_snapshot),
+        crate::client::endpoint::SurfaceActivationProgress::Pending
+    );
+    let mut target_surface = surface();
+    target_surface.boot_id = "remote-boot".into();
+    assert_eq!(
+        activation.receive_surface(&remote, 7, target_surface.clone()),
+        crate::client::endpoint::SurfaceActivationProgress::Ready
+    );
+    assert!(matches!(
+        activation.complete(&mut state, &mut endpoints),
+        Ok(crate::client::endpoint::ActivationCompletion::AwaitingPresentationSync {
+            endpoint,
+            ..
+        }) if endpoint == remote
+    ));
+
+    assert_eq!(
+        activation.receive_response(
+            &remote,
+            7,
+            "client-shell-surface:3:presentation-sync",
+            &activation_surface_success("client-shell-surface:3:presentation-sync", true, 2),
+            &mut endpoints,
+        ),
+        crate::client::endpoint::SurfaceActivationProgress::Pending
+    );
+    let mut sync_snapshot = target_snapshot.as_ref().clone();
+    sync_snapshot.revision = 2;
+    state.set_endpoint_snapshot_for_generation(&remote, 7, Box::new(sync_snapshot.clone()));
+    assert_eq!(
+        activation.receive_snapshot(&remote, 7, &sync_snapshot),
+        crate::client::endpoint::SurfaceActivationProgress::Pending
+    );
+    target_surface.projection_revision = 2;
+    target_surface.surface_revision = 2;
+    assert_eq!(
+        activation.receive_surface(&remote, 7, target_surface),
+        crate::client::endpoint::SurfaceActivationProgress::Ready
+    );
+    assert_eq!(
+        activation.complete(&mut state, &mut endpoints),
+        Ok(crate::client::endpoint::ActivationCompletion::AwaitingPresentationEffects)
+    );
+    assert_eq!(
+        activation.receive_presentation_effects_ready(&remote, 7, "3:7:remote-boot"),
+        crate::client::endpoint::SurfaceActivationProgress::Ready
+    );
+    assert_eq!(
+        activation.complete(&mut state, &mut endpoints),
+        Ok(crate::client::endpoint::ActivationCompletion::Activated)
+    );
+    assert!(state.finish_endpoint_activation(&remote));
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+            target: ClientRenameTarget::Workspace { ref workspace_id },
+            ..
+        })) if workspace_id == "ws_1" && state.active_endpoint_id == remote
+    ));
+    let rename = state.handle_input_bytes(b"\r");
+    assert!(matches!(
+        rename.actions.as_slice(),
+        [ClientShellAction::Endpoint {
+            endpoint_id,
+            request,
+            ..
+        }] if endpoint_id == &remote
+            && matches!(
+                &request.method,
+                crate::api::schema::Method::WorkspaceRename(params)
+                    if params.workspace_id == "ws_1" && params.label == "remote-workspace"
+            )
+    ));
 }
 
 #[test]
@@ -749,7 +1100,7 @@ fn expanded_machine_sidebar_applies_space_row_gap_within_each_machine() {
     );
 
     state.workspace_scroll = usize::MAX;
-    state.compose(100, 18).expect("scrolled endpoint frame");
+    state.compose(100, 10).expect("scrolled endpoint frame");
     let metrics = state
         .hits
         .workspace_scroll_metrics
@@ -842,7 +1193,9 @@ fn desktop_federated_spaces_omit_agent_sidebar_hits() {
     remote.agents = vec![agent("remote agent", AgentStatus::Blocked, 1)];
     state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
 
-    state.compose(100, 28).expect("combined endpoint Spaces frame");
+    state
+        .compose(100, 28)
+        .expect("combined endpoint Spaces frame");
     assert!(state.hits.agents.is_empty());
     assert!(state.hits.endpoint_agents.is_empty());
     assert_eq!(state.hits.agent_body, Rect::default());

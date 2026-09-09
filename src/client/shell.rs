@@ -10,7 +10,6 @@ mod config;
 mod context_menu;
 mod copy_mode;
 mod endpoint_agent_state;
-mod endpoint_agents;
 mod endpoint_navigation;
 mod endpoint_notices;
 mod endpoint_sidebar;

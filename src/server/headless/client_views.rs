@@ -50,6 +50,39 @@ pub(super) fn forward_proxied_api_response(
     result
 }
 
+fn forward_client_shell_tab_focus_response(
+    proxy: Option<(
+        std::sync::mpsc::Sender<String>,
+        std::sync::mpsc::Receiver<String>,
+    )>,
+) -> bool {
+    let Some((respond_to, response_rx)) = proxy else {
+        return false;
+    };
+    let Ok(response) = response_rx.recv() else {
+        return false;
+    };
+    let Ok(mut success) = serde_json::from_str::<api::schema::SuccessResponse>(&response) else {
+        let _ = respond_to.send(response);
+        return false;
+    };
+    let is_tab_info = if let api::schema::ResponseResult::TabInfo { tab } = &mut success.result {
+        // `TabInfo.focused` describes the client-shell projection here. The server-global
+        // active tab remains untouched by this endpoint-lane-only operation.
+        tab.focused = true;
+        true
+    } else {
+        false
+    };
+    let response = if is_tab_info {
+        serde_json::to_string(&success).unwrap_or(response)
+    } else {
+        response
+    };
+    let _ = respond_to.send(response);
+    is_tab_info
+}
+
 impl HeadlessServer {
     pub(super) fn default_shell_target(&self) -> Option<crate::ui::TabSurfaceTarget> {
         let workspace_index = self.app.state.active?;
@@ -186,7 +219,10 @@ impl HeadlessServer {
     }
 
     pub(super) fn focus_shell_client_on_tab(&mut self, client_id: u64, tab_id: &str) -> bool {
-        let Some((workspace_index, _)) = self.app.parse_tab_id(tab_id) else {
+        let Some((workspace_index, tab_index)) = self.app.parse_tab_id(tab_id) else {
+            return false;
+        };
+        let Some(canonical_tab_id) = self.app.public_tab_id(workspace_index, tab_index) else {
             return false;
         };
         let workspace_id = self.app.public_workspace_id(workspace_index);
@@ -196,7 +232,7 @@ impl HeadlessServer {
         let Some(location) = client.shell_location.as_mut() else {
             return false;
         };
-        location.focus_tab(workspace_id, tab_id.to_owned());
+        location.focus_tab(workspace_id, canonical_tab_id);
         true
     }
 
@@ -279,6 +315,15 @@ impl HeadlessServer {
                 | Method::WorktreeCreate(_)
                 | Method::WorktreeOpen(_)
                 | Method::WorktreeRemove(_)
+        )
+    }
+
+    fn shell_endpoint_rejects_tab_mutation(method: &api::schema::Method) -> bool {
+        use api::schema::Method;
+
+        matches!(
+            method,
+            Method::TabCreate(_) | Method::TabMove(_) | Method::TabRename(_) | Method::TabClose(_)
         )
     }
 
@@ -914,43 +959,52 @@ impl HeadlessServer {
     pub(super) fn handle_client_shell_api_request(
         &mut self,
         client_id: u64,
-        msg: api::ApiRequestMessage,
+        mut msg: api::ApiRequestMessage,
     ) -> bool {
-        if let api::schema::Method::TabFocus(target) = &msg.request.method {
-            let rejects_inactive_tab = self
-                .app
-                .parse_tab_id(&target.tab_id)
-                .is_some_and(|(workspace_index, tab_index)| {
-                    !(self.app.state.active == Some(workspace_index)
-                        && self
-                            .app
-                            .state
-                            .workspaces
-                            .get(workspace_index)
-                            .is_some_and(|workspace| {
-                                workspace.active_tab_index() == tab_index
-                            }))
-                });
-            if rejects_inactive_tab {
-                // Run the normal API path so shutdown/deferral handling and the neutral
-                // multi_tab_unsupported response remain unchanged, but do it before any
-                // client-location pre-application can make the target appear active.
-                return self.handle_api_request_with_shutdown_check_inner(msg, false);
-            }
-        }
-
+        let local_tab_focus_target = match &msg.request.method {
+            api::schema::Method::TabFocus(target) => Some(target.clone()),
+            _ => None,
+        };
+        let preserve_client_shell_location = local_tab_focus_target.is_some()
+            || Self::shell_endpoint_rejects_tab_mutation(&msg.request.method);
         let focus_before = self.shell_focus_target(client_id);
         let focused_tabs_before = self.focused_shell_tabs();
         let method_claims_geometry = Self::shell_endpoint_claims_geometry(&msg.request.method);
         let reconcile = Self::shell_locations_may_need_reconcile(&msg.request.method);
         let all_focus_before = reconcile.then(|| self.shell_focus_targets());
-        let navigation_changed =
-            self.apply_shell_navigation_request(client_id, &msg.request.method);
-        self.set_default_shell_target_from_client(client_id);
+        // Keep the public App::handle_tab_focus policy intact. A client shell's TabFocus is a
+        // read-only projection change, so route its response through TabGet after the common
+        // shutdown/response handling has been retained.
+        let local_tab_focus_response = local_tab_focus_target.as_ref().map(|target| {
+            let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
+            let original = std::mem::replace(&mut msg.respond_to, proxy_tx);
+            msg.request.method = api::schema::Method::TabGet(target.clone());
+            (original, proxy_rx)
+        });
+        let mut navigation_changed = if preserve_client_shell_location {
+            false
+        } else {
+            let navigation_changed =
+                self.apply_shell_navigation_request(client_id, &msg.request.method);
+            self.set_default_shell_target_from_client(client_id);
+            navigation_changed
+        };
         let popup_before = self.app.state.popup_pane.is_some();
         let popup_owner = self.shell_tab_id_for_client(client_id);
         let changed = self.handle_api_request_with_shutdown_check_inner(msg, false);
-        self.focus_shell_client_on_default_target(client_id);
+        let local_tab_focus_succeeded =
+            forward_client_shell_tab_focus_response(local_tab_focus_response);
+        let local_navigation_changed = if local_tab_focus_succeeded {
+            local_tab_focus_target
+                .as_ref()
+                .is_some_and(|target| self.focus_shell_client_on_tab(client_id, &target.tab_id))
+        } else {
+            false
+        };
+        navigation_changed |= local_navigation_changed;
+        if !preserve_client_shell_location {
+            self.focus_shell_client_on_default_target(client_id);
+        }
         if !popup_before && self.app.state.popup_pane.is_some() {
             self.popup_owner_tab_id = popup_owner;
         }
@@ -958,7 +1012,10 @@ impl HeadlessServer {
             self.reconcile_client_shell_locations();
         }
         let focus_after = self.shell_focus_target(client_id);
-        if let Some(all_focus_before) = all_focus_before {
+        if local_tab_focus_target.is_some() {
+            // The local projection must never participate in session-wide focus tracking.
+            self.app.accept_current_focus_without_events();
+        } else if let Some(all_focus_before) = all_focus_before {
             self.finish_shell_location_reconciliation(all_focus_before, &focused_tabs_before);
         } else {
             let focused_tabs_after = self.focused_shell_tabs();
@@ -977,8 +1034,12 @@ impl HeadlessServer {
             }
         }
         let geometry_changed = method_claims_geometry
-            && if reconcile {
-                self.reapply_controlled_shell_tab_geometry(false)
+            && if local_tab_focus_target.is_some() {
+                local_navigation_changed
+                    && (self.claim_shell_tab_geometry(client_id, false)
+                        || self.resize_shell_tab_if_controller(client_id, false))
+            } else if preserve_client_shell_location {
+                false
             } else {
                 self.claim_shell_tab_geometry(client_id, false)
                     || self.resize_shell_tab_if_controller(client_id, false)

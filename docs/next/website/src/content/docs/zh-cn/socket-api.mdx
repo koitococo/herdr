@@ -174,7 +174,7 @@ CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSO
 
 响应包含 `workspace_id`、`tab_id`、`zoomed`、`focused_pane_id` 和 `root`。`root` 是由 `pane` 和 `split` 节点组成的 BSP 树。窗格节点可以包含 `pane_id`、`label`、`cwd` 和 argv `command`。分割节点使用 `direction` (`right` 或 `down`)、`ratio`、`first` 和 `second`。
 
-`layout.apply` 从声明式的树创建一个新标签页。提供 `tab_id` 时,Herdr 先创建替代标签页,再关闭旧标签页。它会恢复结构、标签、cwd、env 和可选的 argv 命令;不会保留活跃的 PTY、回滚内容或运行中的进程。
+`layout.apply` 使用 `tab_id` 替换已有的唯一标签页;省略 `tab_id` 或会创建另一个标签页的请求会被 `multi_tab_unsupported` 拒绝。它会恢复结构、标签、cwd、env 和可选的 argv 命令;不会保留活跃的 PTY、回滚内容或运行中的进程。
 
 ```json
 {
@@ -182,6 +182,7 @@ CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSO
   "method": "layout.apply",
   "params": {
     "workspace_id": "wabc",
+    "tab_id": "wabc:t1",
     "tab_label": "dev",
     "focus": true,
     "root": {

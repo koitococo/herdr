@@ -109,6 +109,13 @@ impl ClientShellState {
 
     pub(crate) fn retire_endpoint(&mut self, endpoint_id: &ClientEndpointId) {
         self.clear_workspace_double_clicks_for_endpoint(endpoint_id);
+        if self
+            .pending_endpoint_activation
+            .as_ref()
+            .is_some_and(|pending| pending == endpoint_id)
+        {
+            self.discard_endpoint_activation(endpoint_id);
+        }
         self.retire_endpoint_notifications(endpoint_id);
         if let Some(endpoint) = self
             .endpoints
@@ -143,6 +150,13 @@ impl ClientShellState {
 
     pub(crate) fn mark_endpoint_disconnected(&mut self, endpoint_id: &ClientEndpointId) {
         self.clear_workspace_double_clicks_for_endpoint(endpoint_id);
+        if self
+            .pending_endpoint_activation
+            .as_ref()
+            .is_some_and(|pending| pending == endpoint_id)
+        {
+            self.discard_endpoint_activation(endpoint_id);
+        }
         self.set_endpoint_status(endpoint_id, ClientEndpointStatus::Reconnecting);
         if endpoint_id == &self.active_endpoint_id {
             let pending = self.pending_requests.keys().cloned().collect::<Vec<_>>();
@@ -211,14 +225,16 @@ impl ClientShellState {
             return false;
         };
         let generation = endpoint.snapshot_generation;
-        let switching_endpoint = endpoint_id != &self.active_endpoint_id;
+        let preserve_workspace_endpoint =
+            (endpoint_id != &self.active_endpoint_id).then_some(endpoint_id);
+        let switching_endpoint = preserve_workspace_endpoint.is_some();
         let agent_scroll = self.agent_scroll;
         if switching_endpoint {
             self.active_endpoint_id = endpoint_id.clone();
             self.pane_surface = None;
             self.pending_pane_surface = None;
         }
-        self.apply_active_snapshot(snapshot, generation);
+        self.apply_active_snapshot(snapshot, generation, preserve_workspace_endpoint);
         if switching_endpoint {
             // The aggregate agent list belongs to the client, not one endpoint.
             self.agent_scroll = agent_scroll;
@@ -670,7 +686,7 @@ impl ClientShellState {
             return;
         };
         if endpoint_id == &self.active_endpoint_id {
-            self.apply_active_snapshot(snapshot, generation);
+            self.apply_active_snapshot(snapshot, generation, None);
         }
     }
 }

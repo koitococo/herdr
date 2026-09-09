@@ -902,6 +902,9 @@ pub(crate) struct ClientShellState {
     pub(super) replaying_url_click: bool,
     pub(super) selection: Option<crate::selection::Selection<String>>,
     pub(super) last_workspace_clicks: HashMap<InputSourceId, ClientWorkspaceClick>,
+    /// Second-click intents retained while an endpoint handoff commits its coherent surface.
+    pub(super) pending_workspace_rename_intents: HashMap<InputSourceId, ClientWorkspaceClick>,
+    pub(super) pending_endpoint_activation: Option<ClientEndpointId>,
     pub(super) last_pane_click: Option<ClientPaneClick>,
     pub(super) selection_autoscroll: Option<ClientSelectionAutoscroll>,
     pub(super) selection_autoscroll_deadline: Option<std::time::Instant>,
@@ -1065,6 +1068,8 @@ impl ClientShellState {
             replaying_url_click: false,
             selection: None,
             last_workspace_clicks: HashMap::new(),
+            pending_workspace_rename_intents: HashMap::new(),
+            pending_endpoint_activation: None,
             last_pane_click: None,
             selection_autoscroll: None,
             selection_autoscroll_deadline: None,
@@ -1213,9 +1218,105 @@ impl ClientShellState {
             rows: surface.height.max(1),
         }
     }
+    pub(crate) fn note_endpoint_activation_requested(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        target: Option<&ClientEndpointFocusTarget>,
+    ) {
+        let workspace_id = match target {
+            Some(ClientEndpointFocusTarget::Workspace(workspace_id)) => Some(workspace_id),
+            _ => None,
+        };
+        let keep_click = |click: &ClientWorkspaceClick| {
+            &click.endpoint_id == endpoint_id
+                && workspace_id.is_some_and(|workspace_id| {
+                    click.workspace_id.as_str() == workspace_id.as_str()
+                })
+        };
+        self.pending_endpoint_activation = Some(endpoint_id.clone());
+        self.last_workspace_clicks
+            .retain(|_, click| keep_click(click));
+        self.pending_workspace_rename_intents
+            .retain(|_, click| keep_click(click));
+    }
+
+    pub(crate) fn discard_endpoint_activation(&mut self, endpoint_id: &ClientEndpointId) {
+        if self
+            .pending_endpoint_activation
+            .as_ref()
+            .is_some_and(|pending| pending == endpoint_id)
+        {
+            self.pending_endpoint_activation = None;
+        }
+        self.last_workspace_clicks
+            .retain(|_, click| &click.endpoint_id != endpoint_id);
+        self.pending_workspace_rename_intents
+            .retain(|_, click| &click.endpoint_id != endpoint_id);
+    }
+
+    pub(crate) fn discard_pending_endpoint_activation(&mut self) {
+        self.pending_endpoint_activation = None;
+        self.last_workspace_clicks.clear();
+        self.pending_workspace_rename_intents.clear();
+    }
+
+    pub(crate) fn finish_endpoint_activation(&mut self, endpoint_id: &ClientEndpointId) -> bool {
+        let activation_matches = self
+            .pending_endpoint_activation
+            .as_ref()
+            .is_some_and(|pending| pending == endpoint_id);
+        if !activation_matches {
+            self.discard_endpoint_activation(endpoint_id);
+            return false;
+        }
+        self.pending_endpoint_activation = None;
+        let workspace_id = self
+            .pending_workspace_rename_intents
+            .values()
+            .filter(|click| &click.endpoint_id == endpoint_id)
+            .max_by(|left, right| left.at.cmp(&right.at))
+            .map(|click| click.workspace_id.clone());
+        self.pending_workspace_rename_intents
+            .retain(|_, click| &click.endpoint_id != endpoint_id);
+        let Some(workspace_id) = workspace_id else {
+            return false;
+        };
+        let coherent_surface = self
+            .snapshot
+            .as_deref()
+            .zip(self.pane_surface.as_ref())
+            .is_some_and(|(snapshot, surface)| {
+                snapshot.boot_id == surface.boot_id
+                    && snapshot.revision == surface.projection_revision
+            });
+        let endpoint_snapshot_matches = self
+            .endpoints
+            .iter()
+            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
+            .and_then(|endpoint| endpoint.snapshot.as_deref())
+            .zip(self.snapshot.as_deref())
+            .is_some_and(|(endpoint_snapshot, snapshot)| {
+                endpoint_snapshot.boot_id == snapshot.boot_id
+                    && endpoint_snapshot.revision == snapshot.revision
+            });
+        let focused_workspace_matches = self.snapshot.as_deref().is_some_and(|snapshot| {
+            snapshot.focused_workspace_id.as_deref() == Some(workspace_id.as_str())
+        });
+        if &self.active_endpoint_id != endpoint_id
+            || self.overlay.is_some()
+            || !self.endpoint_is_online(endpoint_id)
+            || !coherent_surface
+            || !endpoint_snapshot_matches
+            || !focused_workspace_matches
+        {
+            return false;
+        }
+        self.open_rename_workspace_overlay_for(endpoint_id, workspace_id)
+    }
 
     pub(super) fn clear_workspace_double_click(&mut self, source_id: InputSourceId) {
         self.last_workspace_clicks.remove(&source_id);
+        self.pending_workspace_rename_intents.remove(&source_id);
     }
 
     pub(crate) fn clear_input_source(&mut self, source_id: InputSourceId) {
@@ -1224,6 +1325,7 @@ impl ClientShellState {
 
     pub(super) fn clear_workspace_double_clicks(&mut self) {
         self.last_workspace_clicks.clear();
+        self.pending_workspace_rename_intents.clear();
     }
 
     pub(super) fn clear_workspace_double_clicks_for_endpoint(
@@ -1232,9 +1334,18 @@ impl ClientShellState {
     ) {
         self.last_workspace_clicks
             .retain(|_, click| &click.endpoint_id != endpoint_id);
+        self.pending_workspace_rename_intents
+            .retain(|_, click| &click.endpoint_id != endpoint_id);
     }
 
     pub(super) fn reset_endpoint_projection(&mut self) {
+        self.reset_endpoint_projection_for(None);
+    }
+
+    pub(super) fn reset_endpoint_projection_for(
+        &mut self,
+        preserve_workspace_endpoint: Option<&ClientEndpointId>,
+    ) {
         self.hits = ShellHitMap::default();
         self.pane_surface = None;
         self.pending_pane_surface = None;
@@ -1277,7 +1388,15 @@ impl ClientShellState {
         self.url_click_consumes_until_up = false;
         self.replaying_url_click = false;
         self.selection = None;
-        self.clear_workspace_double_clicks();
+        if let Some(endpoint_id) = preserve_workspace_endpoint {
+            self.last_workspace_clicks
+                .retain(|_, click| &click.endpoint_id == endpoint_id);
+            self.pending_workspace_rename_intents
+                .retain(|_, click| &click.endpoint_id == endpoint_id);
+        } else {
+            self.clear_workspace_double_clicks();
+            self.discard_pending_endpoint_activation();
+        }
         self.last_pane_click = None;
         self.selection_autoscroll = None;
         self.selection_autoscroll_deadline = None;
@@ -1298,6 +1417,7 @@ impl ClientShellState {
         &mut self,
         mut snapshot: Box<ClientShellSnapshot>,
         generation: Option<u64>,
+        preserve_workspace_endpoint: Option<&ClientEndpointId>,
     ) {
         snapshot
             .commands
@@ -1381,7 +1501,7 @@ impl ClientShellState {
             let preview = (self.mode == ClientShellMode::Navigate)
                 .then(|| self.navigate_workspace_id.take())
                 .flatten();
-            self.reset_endpoint_projection();
+            self.reset_endpoint_projection_for(preserve_workspace_endpoint);
             self.navigate_workspace_id = preview;
         } else if let Some(previous) = self
             .snapshot

@@ -55,12 +55,10 @@ impl ClientShellState {
             collapsed_groups: &self.collapsed_groups,
             remote_collapsed_groups: &self.remote_collapsed_groups,
             workspace_scroll: &mut self.workspace_scroll,
-            agent_scroll: &mut self.agent_scroll,
             tab_scroll: &mut self.tab_scroll,
             reveal_focused_workspace: &mut self.reveal_focused_workspace,
             reveal_focused_tab: &mut self.reveal_focused_tab,
             sidebar_collapsed: false,
-            sidebar_section_split: self.sidebar_section_split,
             tab_drag_insert_index: None,
             selected_workspace_id: self
                 .navigate_workspace_id
@@ -190,12 +188,10 @@ impl ClientShellState {
                 collapsed_groups: &self.collapsed_groups,
                 remote_collapsed_groups: &self.remote_collapsed_groups,
                 workspace_scroll: &mut self.workspace_scroll,
-                agent_scroll: &mut self.agent_scroll,
                 tab_scroll: &mut self.tab_scroll,
                 reveal_focused_workspace: &mut self.reveal_focused_workspace,
                 reveal_focused_tab: &mut self.reveal_focused_tab,
                 sidebar_collapsed: self.sidebar_collapsed,
-                sidebar_section_split: self.sidebar_section_split,
                 tab_drag_insert_index,
                 selected_workspace_id: self
                     .navigate_workspace_id

@@ -358,7 +358,7 @@ fn selection_edge_drag_requests_scroll_and_timer_continues_it() {
         viewport_rows: 2,
     });
     state.set_pane_surface(pane_surface);
-    state.compose(106, 20).expect("composed frame");
+    state.compose(44, 20).expect("composed frame");
     let pane = state.hits.panes[0].clone();
     state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
