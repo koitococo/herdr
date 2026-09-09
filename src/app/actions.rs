@@ -570,7 +570,6 @@ impl AppState {
         true
     }
 
-
     pub(crate) fn terminal_ids_for_workspace(
         &self,
         ws_idx: usize,
@@ -696,7 +695,6 @@ impl AppState {
         if self.workspaces.is_empty() {
             self.active = None;
             self.selected = 0;
-
         } else {
             // Keep focus on the previously focused workspace
             if let Some(id) = active_workspace_id {
@@ -708,7 +706,6 @@ impl AppState {
                 self.selected = self.workspaces.len() - 1;
             }
             self.active = Some(self.selected);
-
         }
     }
 }
@@ -2554,7 +2551,6 @@ mod tests {
         assert_eq!(selected_url("open file:///tmp/report", "file"), None);
     }
 
-
     #[test]
     fn apply_workspace_git_statuses_updates_matching_workspace() {
         let mut state = app_with_workspaces(&["one", "two"]);
@@ -2701,7 +2697,6 @@ mod tests {
         assert!(changed);
         assert_eq!(state.workspaces[0].worktree_space().cloned(), membership);
     }
-
 
     #[test]
     fn switch_workspace_updates_active_and_selected() {

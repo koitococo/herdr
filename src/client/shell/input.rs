@@ -156,7 +156,7 @@ impl ClientShellState {
         outcome
     }
 
-    pub(super) fn handle_raw_events(&mut self, events: Vec<RawInputEvent>) -> ClientShellInput {
+    pub(crate) fn handle_raw_events(&mut self, events: Vec<RawInputEvent>) -> ClientShellInput {
         self.handle_raw_events_from_input_source(LOCAL_INPUT_SOURCE, events)
     }
 

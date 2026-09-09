@@ -48,9 +48,12 @@ use clipboard_forwarding::forward_clipboard;
 use config_reload::reload_local_client_config;
 use config_reload::{apply_reload, init_logging};
 use events::ClientLoopEvent;
-use loop_config::{client_refresh_interval_from_env, ClientLoopConfig, SemanticFramePacer};
 #[cfg(test)]
 use loop_config::CLIENT_REFRESH_RATE_ENV_VAR;
+use loop_config::{
+    client_refresh_interval_from_env, effective_presentation_interval, ClientLoopConfig,
+    SemanticFramePacer,
+};
 use shell_runtime::*;
 use state::ClientState;
 #[cfg(unix)]
@@ -110,11 +113,10 @@ use clipboard_images::{read_image_file_from_client_events, should_bridge_clipboa
 use clipboard_images::{read_image_file_from_terminal_drop, should_bridge_clipboard_image_paste};
 pub use errors::ClientError;
 #[cfg(test)]
+use frame_output::write_encoded_frame_with_graphics;
+#[cfg(test)]
 use frame_output::{clear_received_kitty_graphics, kitty_graphics_image_ids};
-use frame_output::{
-    contains_kitty_graphics_bytes, record_received_kitty_graphics,
-    write_encoded_frame_with_graphics,
-};
+use frame_output::{contains_kitty_graphics_bytes, record_received_kitty_graphics};
 pub(crate) use handshake::probe_endpoint_negotiation;
 use handshake::{client_shell_keybinding_source, do_handshake, is_remote_client_process};
 #[cfg(test)]
@@ -163,9 +165,9 @@ fn run_client_with_mode(
     log_message: &'static str,
 ) -> io::Result<()> {
     init_logging();
-    let presentation_interval = client_refresh_interval_from_env();
-
+    let env_presentation_interval = client_refresh_interval_from_env();
     let loaded_config = crate::config::Config::load();
+    let config_presentation_interval = loaded_config.config.experimental.refresh_rate.interval();
     // Windows may not have virtual terminal processing enabled until the rendered
     // client initializes the terminal, so defer the host mouse reset to
     // `setup_terminal_with_capabilities` instead of emitting raw escapes early.
@@ -211,9 +213,11 @@ fn run_client_with_mode(
         initial_host_input: Vec::new(),
         endpoint_keybindings,
         remote_image_paste_key,
-        presentation_interval: client_rendered_shell
-            .then_some(presentation_interval)
-            .flatten(),
+        presentation_interval: client_rendered_shell.then_some(effective_presentation_interval(
+            config_presentation_interval,
+            env_presentation_interval,
+        )),
+        env_presentation_interval,
         shell_config,
     };
 
@@ -1948,6 +1952,7 @@ async fn run_client_loop(
                         &mut pending_activation,
                         &host_mouse_capture_active,
                         &host_sgr_pixels_active,
+                        config.env_presentation_interval,
                         &mut prefix_input_source,
                     )?,
                     ServerMessage::MouseCapture {

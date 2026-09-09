@@ -13,11 +13,12 @@ Herdr launches or attaches to your default background session. You do not manage
 
 ## Create a workspace
 
-When a session has no workspaces, Herdr opens one automatically. A workspace is a project-level container for tabs, panes, and agents. Give each active project its own workspace to keep agent state readable in the sidebar.
+When a session has no workspaces, Herdr opens one automatically. A workspace is a project-level container for panes and agents. Give each active project its own workspace to keep agent state readable.
+The desktop uses Spaces (workspaces) for separate layouts. Tab identity remains available through compatibility APIs, and legacy mobile views can navigate existing tabs; creating or mutating tabs is not supported.
 
 ## Use the mouse
 
-Herdr is mouse-native, so start by clicking panes, tabs, workspaces, and agents to focus them. Drag split borders to resize. Right-click for context menus, including splitting panes and creating tabs. Double-click a workspace card's content to open the existing rename dialog; click a worktree group's arrow to expand or collapse it. Drag-select text to copy it to your clipboard; double-click a token to select it, or hold the second press and drag to extend the selection by whole words. Both gestures copy when you release the mouse. Copying does not require Ctrl+C.
+Herdr is mouse-native, so start by clicking panes and workspaces to focus them. Drag split borders to resize. Right-click for context menus, including splitting panes. Double-click a workspace card's content to open the existing rename dialog; click a worktree group's arrow to expand or collapse it. Drag-select text to copy it to your clipboard; double-click a token to select it, or hold the second press and drag to extend the selection by whole words. Both gestures copy when you release the mouse. Copying does not require Ctrl+C.
 
 Ctrl-click opens pane links when your terminal sends the modified click to Herdr. This works for OSC 8 hyperlinks and `http://` or `https://` URLs, including wrapped links whose beginning or end is outside the visible area. Hold Ctrl and move the pointer over a link to underline its visible segments. Hover highlighting clears when you move away, the pane content changes, or Herdr receives a Ctrl-release event; some terminals only report modifier changes with mouse movement. On macOS, use Ctrl-click for Herdr-handled pane links while mouse capture is enabled; Cmd-click is only available through the terminal-native bypass path, such as Shift-Cmd-click or `ui.mouse_capture = false`.
 
@@ -31,7 +32,7 @@ Start your coding agent in a pane:
 claude
 ```
 
-Or `codex`, `pi`, `opencode`, or any other [supported agent](/docs/agents/). Herdr detects it automatically. Across every workspace, the sidebar shows whether each agent is `working`, `blocked`, `done`, or `idle`, so you always know which project needs you.
+Or `codex`, `pi`, `opencode`, or any other [supported agent](/docs/agents/). Herdr detects it automatically. Agent state remains available across every workspace, showing whether each agent is `working`, `blocked`, `done`, or `idle`, so you always know which project needs you.
 
 ## Keyboard control
 
@@ -43,8 +44,6 @@ Common actions:
 | --- | --- |
 | Split right | `prefix+v` |
 | Split down | `prefix+minus` |
-| New tab | `prefix+c` |
-| Next / previous tab | `prefix+n` / `prefix+p` |
 | Workspace navigation | `prefix+w` |
 | New workspace | `prefix+shift+n` |
 | Detach client | `prefix+q` |

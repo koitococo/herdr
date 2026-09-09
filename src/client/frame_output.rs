@@ -7,7 +7,7 @@ use crate::protocol::{render_ansi, FrameData};
 use base64::Engine as _;
 
 /// Local output only; raw uploads are never added to a published frame codec.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ComposedFrame {
     pub(crate) frame: FrameData,
     pub(crate) graphics: GraphicsOutput,
@@ -81,6 +81,7 @@ pub(super) fn write_composed_frame(
     io::Write::flush(&mut writer)
 }
 
+#[cfg(test)]
 pub(super) fn write_encoded_frame_with_graphics(
     mut writer: impl io::Write,
     encoded: &[u8],

@@ -29,108 +29,10 @@ fn desktop_spaces_shell_hides_tab_chrome() {
 }
 
 #[test]
-fn focused_last_overflow_tab_shows_its_full_label() {
-    let mut projected = snapshot();
-    let labels = [
-        "1",
-        "Laiza Portfolio Site",
-        "linkedin posts",
-        "update cv",
-        "nvim",
-        "brother",
-        "day organiser",
-        "nvim test",
-    ];
-    projected.tabs = labels
-        .iter()
-        .enumerate()
-        .map(|(index, label)| ClientShellTab {
-            tab_id: format!("tab_{}", index + 1),
-            workspace_id: "ws_1".into(),
-            number: index + 1,
-            label: (*label).into(),
-            custom_label: index > 0,
-            zoomed: false,
-            focused: index == 7,
-            agent_status: AgentStatus::Idle,
-        })
-        .collect();
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    for number in [8, 7, 8] {
-        let tab_id = format!("tab_{number}");
-        projected.focused_tab_id = Some(tab_id.clone());
-        projected.workspaces[0].active_tab_id = tab_id.clone();
-        projected.panes[0].tab_id = tab_id.clone();
-        for tab in &mut projected.tabs {
-            tab.focused = tab.tab_id == tab_id;
-        }
-        state.set_snapshot(Box::new(projected.clone()));
-        state.set_pane_surface(surface());
-        let frame = state
-            .compose(133, 20)
-            .expect("reporter's overflowing strip");
-        assert_eq!(
-            state.hits.new_tab.right() - state.hits.tab_scroll_left.x,
-            107
-        );
-        let rect = state
-            .hits
-            .tabs
-            .iter()
-            .find(|(_, id)| id == &tab_id)
-            .expect("focused tab")
-            .0;
-        let text = (rect.x..rect.right())
-            .map(|x| {
-                frame.cells[(rect.y * frame.width + x) as usize]
-                    .symbol
-                    .as_str()
-            })
-            .collect::<String>();
-        assert!(
-            text.contains(labels[number - 1]),
-            "focused tab rendered as {text:?}, rect={rect:?}"
-        );
-    }
-
-    // Manual scrolling must be able to reveal the rest of a partially drawn last tab.
-    let end_scroll = state.tab_scroll;
-    let left = state.hits.tab_scroll_left;
-    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: left.x + 1,
-        row: left.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    let frame = state.compose(133, 20).expect("manual scroll left");
-    assert_eq!(state.tab_scroll, end_scroll - 1);
-    let right = state.hits.tab_scroll_right;
-    assert_eq!(
-        frame.cells[(right.y * frame.width + right.x + 1) as usize].fg,
-        crate::protocol::color_to_u32(state.config.palette.overlay1),
-        "right arrow stays enabled while the final tab is clipped"
-    );
-    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: right.x + 1,
-        row: right.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    let frame = state.compose(133, 20).expect("manual scroll right");
-    assert_eq!(state.tab_scroll, end_scroll);
-    assert!(frame_rows(&frame)[0].contains("nvim test"));
-    assert_eq!(
-        frame.cells[(right.y * frame.width + right.x + 1) as usize].fg,
-        crate::protocol::color_to_u32(state.config.palette.overlay0),
-        "right arrow dims at the useful scroll limit"
-    );
-}
-
-#[test]
 fn focused_workspace_change_reveals_new_workspace_in_full_sidebar() {
     let mut initial = snapshot();
     let template = initial.workspaces[0].clone();
-    initial.workspaces = (1..=12)
+    initial.workspaces = (1..=30)
         .map(|number| ClientShellWorkspace {
             workspace_id: format!("ws_{number}"),
             number,
@@ -150,13 +52,13 @@ fn focused_workspace_change_reveals_new_workspace_in_full_sidebar() {
         .hits
         .workspaces
         .iter()
-        .all(|hit| hit.workspace_id != "ws_12"));
+        .all(|hit| hit.workspace_id != "ws_30"));
 
     let mut update = state.snapshot.as_deref().expect("snapshot").clone();
     update.revision = 2;
-    update.focused_workspace_id = Some("ws_12".into());
+    update.focused_workspace_id = Some("ws_30".into());
     for workspace in &mut update.workspaces {
-        workspace.focused = workspace.workspace_id == "ws_12";
+        workspace.focused = workspace.workspace_id == "ws_30";
     }
     let mut updated_surface = surface();
     updated_surface.projection_revision = 2;
@@ -170,7 +72,7 @@ fn focused_workspace_change_reveals_new_workspace_in_full_sidebar() {
         .hits
         .workspaces
         .iter()
-        .any(|hit| hit.workspace_id == "ws_12"));
+        .any(|hit| hit.workspace_id == "ws_30"));
 }
 
 #[test]

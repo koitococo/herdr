@@ -3,13 +3,13 @@
 use std::io::{self, Write};
 use std::sync::Arc;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum GraphicsOperation {
     Bytes(Vec<u8>),
     Upload { control: String, data: Arc<[u8]> },
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GraphicsOutput {
     pub(crate) operations: Vec<GraphicsOperation>,
 }

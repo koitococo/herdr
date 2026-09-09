@@ -147,7 +147,23 @@ impl ClientState {
         self.repaint_pending = true;
     }
 
+    pub(super) fn update_presentation_interval(&mut self, interval: Duration) {
+        if let Some(pacer) = self.presentation_pacer.as_mut() {
+            pacer.update_interval(interval);
+        }
+    }
+
     pub(super) fn freeze_presentation(&mut self) {
+        self.flush_scope_mismatch_graphics();
+        if self.kitty_graphics_enabled {
+            if let Some(graphics) = self
+                .presentation_pacer
+                .as_mut()
+                .and_then(SemanticFramePacer::take_pending_graphics)
+            {
+                self.write_graphics_now(graphics);
+            }
+        }
         self.presentation_frozen = true;
         self.clear_pending_presentation();
     }
@@ -211,15 +227,23 @@ impl ClientState {
             .and_then(SemanticFramePacer::presentation_deadline)
     }
 
+    fn presentation_scope(&self) -> Option<u64> {
+        self.shell
+            .as_ref()
+            .map(shell::ClientShellState::graphics_scope_epoch)
+    }
+
     pub(super) fn present_due(&mut self, now: Instant) {
         if self.presentation_frozen {
             self.clear_pending_presentation();
             return;
         }
+        self.flush_scope_mismatch_graphics();
+        let scope = self.presentation_scope();
         let frame = self
             .presentation_pacer
             .as_mut()
-            .and_then(|pacer| pacer.present_due(now));
+            .and_then(|pacer| pacer.present_due_scoped(now, scope));
         if let Some(frame) = frame {
             self.present_frame_now(frame);
         }
@@ -228,6 +252,26 @@ impl ClientState {
     fn clear_pending_presentation(&mut self) {
         if let Some(pacer) = self.presentation_pacer.as_mut() {
             pacer.clear();
+        }
+    }
+
+    fn flush_scope_mismatch_graphics(&mut self) {
+        let scope = self.presentation_scope();
+        let graphics = self
+            .presentation_pacer
+            .as_mut()
+            .and_then(|pacer| pacer.take_scope_mismatch_graphics(scope));
+        if let Some(graphics) = graphics {
+            self.write_graphics_now(graphics);
+        }
+    }
+
+    fn write_graphics_now(&mut self, graphics: crate::kitty_graphics::GraphicsOutput) {
+        let mut stdout = io::stdout();
+        if let Err(error) =
+            frame_output::write_composed_frame(&mut stdout, &[], &graphics, &mut self.image_files)
+        {
+            tracing::warn!(%error, "failed to present client graphics");
         }
     }
 
@@ -343,12 +387,22 @@ impl ClientState {
     }
 
     pub(super) fn present_graphics(&mut self, graphics: &[u8]) {
-        if self.presentation_frozen || graphics.is_empty() || !self.kitty_graphics_enabled {
+        if graphics.is_empty() || !self.kitty_graphics_enabled {
             return;
         }
-        let mut stdout = io::stdout();
-        let _ = write_encoded_frame_with_graphics(&mut stdout, &[], graphics);
-        let _ = stdout.flush();
+        self.flush_scope_mismatch_graphics();
+        let scope = self.presentation_scope();
+        let frozen = self.presentation_frozen;
+        let queued = self
+            .presentation_pacer
+            .as_mut()
+            .is_some_and(|pacer| pacer.queue_graphics(graphics, scope, frozen));
+        if queued || frozen {
+            return;
+        }
+        self.write_graphics_now(crate::kitty_graphics::GraphicsOutput::from_bytes(
+            graphics.to_vec(),
+        ));
     }
 
     pub(super) fn present_surface_patch(
@@ -539,12 +593,19 @@ impl ClientState {
     }
 
     pub(super) fn present_frame(&mut self, frame_data: impl Into<frame_output::ComposedFrame>) {
+        let frame_data = frame_data.into();
         if self.presentation_frozen {
+            self.flush_scope_mismatch_graphics();
+            let scope = self.presentation_scope();
+            if let Some(pacer) = self.presentation_pacer.as_mut() {
+                pacer.queue_composed_graphics(&frame_data.graphics, scope, true);
+            }
             return;
         }
-        let frame_data = frame_data.into();
+        self.flush_scope_mismatch_graphics();
+        let scope = self.presentation_scope();
         let frame = match self.presentation_pacer.as_mut() {
-            Some(pacer) => pacer.submit(frame_data, Instant::now()),
+            Some(pacer) => pacer.submit_scoped(frame_data, Instant::now(), scope),
             None => Some(frame_data),
         };
         if let Some(frame) = frame {

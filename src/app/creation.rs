@@ -115,7 +115,6 @@ impl App {
         })
     }
 
-
     pub(crate) fn create_workspace_with_options(
         &mut self,
         initial_cwd: PathBuf,

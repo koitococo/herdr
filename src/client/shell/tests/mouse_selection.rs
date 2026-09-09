@@ -945,8 +945,6 @@ fn pane_owned_right_click_forwards_the_complete_gesture() {
     assert!(state.pane_mouse_gesture.is_none());
 }
 
-
-
 #[test]
 fn context_menu_keyboard_and_outside_click_are_client_owned() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -976,13 +974,12 @@ fn context_menu_keyboard_and_outside_click_are_client_owned() {
     assert!(text.requests.is_empty());
     let paste = state.handle_raw_events(vec![RawInputEvent::Paste("not pane input".into())]);
     assert!(paste.requests.is_empty());
-    let outside =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 105,
-            row: 19,
-            modifiers: KeyModifiers::empty(),
-        })]);
+    let outside = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 105,
+        row: 19,
+        modifiers: KeyModifiers::empty(),
+    })]);
     assert!(outside.repaint);
     assert!(state.overlay.is_none());
 }

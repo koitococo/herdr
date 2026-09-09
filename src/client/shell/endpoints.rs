@@ -114,6 +114,13 @@ impl ClientShellState {
             self.pending_workspace_highlight = None;
         }
         self.clear_workspace_double_clicks_for_endpoint(endpoint_id);
+        if self
+            .pending_endpoint_activation
+            .as_ref()
+            .is_some_and(|pending| pending == endpoint_id)
+        {
+            self.discard_endpoint_activation(endpoint_id);
+        }
         self.retire_endpoint_notifications(endpoint_id);
         if let Some(endpoint) = self
             .endpoints
@@ -157,6 +164,13 @@ impl ClientShellState {
 
     pub(crate) fn mark_endpoint_disconnected(&mut self, endpoint_id: &ClientEndpointId) {
         self.clear_workspace_double_clicks_for_endpoint(endpoint_id);
+        if self
+            .pending_endpoint_activation
+            .as_ref()
+            .is_some_and(|pending| pending == endpoint_id)
+        {
+            self.discard_endpoint_activation(endpoint_id);
+        }
         self.set_endpoint_status(endpoint_id, ClientEndpointStatus::Reconnecting);
         if endpoint_id == &self.active_endpoint_id {
             let pending = self.pending_requests.keys().cloned().collect::<Vec<_>>();
@@ -211,10 +225,6 @@ impl ClientShellState {
     }
 
     pub(crate) fn activate_endpoint_projection(&mut self, endpoint_id: &ClientEndpointId) -> bool {
-        let pending_agent_reveal = self
-            .pending_agent_reveal
-            .take_if(|(target_endpoint, _)| target_endpoint == endpoint_id);
-        let agent_body_height = self.hits.agent_body.height;
         let Some(endpoint) = self
             .endpoints
             .iter()
@@ -229,20 +239,19 @@ impl ClientShellState {
             return false;
         };
         let generation = endpoint.snapshot_generation;
-        let switching_endpoint = endpoint_id != &self.active_endpoint_id;
+        let preserve_workspace_endpoint =
+            (endpoint_id != &self.active_endpoint_id).then_some(endpoint_id);
+        let switching_endpoint = preserve_workspace_endpoint.is_some();
         let agent_scroll = self.agent_scroll;
         if switching_endpoint {
             self.active_endpoint_id = endpoint_id.clone();
             self.pane_surface = None;
             self.pending_pane_surface = None;
         }
-        self.apply_active_snapshot(snapshot, generation);
+        self.apply_active_snapshot(snapshot, generation, preserve_workspace_endpoint);
         if switching_endpoint {
             // The aggregate agent list belongs to the client, not one endpoint.
             self.agent_scroll = agent_scroll;
-        }
-        if let Some((_, pane_id)) = pending_agent_reveal {
-            self.reveal_endpoint_agent(endpoint_id, &pane_id, agent_body_height);
         }
         true
     }
@@ -348,46 +357,6 @@ impl ClientShellState {
             projection.boot_id,
             projection.revision,
             projection.view,
-        );
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_test_endpoint_agent_view(
-        &mut self,
-        endpoint_id: &ClientEndpointId,
-        view: Option<crate::api::schema::AgentViewSetParams>,
-    ) {
-        let Some((boot_id, revision)) = self
-            .endpoints
-            .iter()
-            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
-            .and_then(|endpoint| {
-                endpoint
-                    .snapshot
-                    .as_deref()
-                    .map(|snapshot| (snapshot.boot_id.clone(), snapshot.revision))
-            })
-        else {
-            return;
-        };
-        self.set_endpoint_agent_view_projection_supported(endpoint_id, true);
-        self.set_endpoint_agent_view_projection(endpoint_id, None, boot_id, revision, Ok(view));
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_test_endpoint_agent_view_projection(
-        &mut self,
-        endpoint_id: &ClientEndpointId,
-        boot_id: &str,
-        revision: u64,
-        view: Option<crate::api::schema::AgentViewSetParams>,
-    ) {
-        self.set_endpoint_agent_view_projection(
-            endpoint_id,
-            None,
-            boot_id.to_owned(),
-            revision,
-            Ok(view),
         );
     }
 
@@ -708,7 +677,7 @@ impl ClientShellState {
             return;
         };
         if endpoint_id == &self.active_endpoint_id {
-            self.apply_active_snapshot(snapshot, generation);
+            self.apply_active_snapshot(snapshot, generation, None);
         }
     }
 }
