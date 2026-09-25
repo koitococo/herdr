@@ -385,8 +385,8 @@ fn ctrl_hover_groups_contiguous_same_destination_cells_without_server_query() {
     let mut next = surface();
     next.surface_revision += 1;
     next.frame.hyperlinks.push("https://example.com/".into());
-    for idx in 1..7 {
-        next.frame.cells[idx].hyperlink = Some(0);
+    for cell in next.frame.cells.iter_mut().take(7).skip(1) {
+        cell.hyperlink = Some(0);
     }
     state.set_pane_surface(next);
     let mouse = hover_mouse(&state, 1, 0);

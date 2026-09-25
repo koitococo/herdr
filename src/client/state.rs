@@ -677,6 +677,7 @@ impl ClientState {
     /// Presents and commits a frame only after all terminal output has been written successfully.
     /// Callers which acknowledge presentation-sensitive work use the return value rather than
     /// treating composition as presentation.
+    #[cfg(unix)]
     pub(super) fn try_present_frame(
         &mut self,
         frame_data: impl Into<frame_output::ComposedFrame>,

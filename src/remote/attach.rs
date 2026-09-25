@@ -3432,7 +3432,9 @@ mod tests {
             .decode(encoded)
             .expect("base64");
         let utf16 = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect::<Vec<_>>();
         String::from_utf16(&utf16).expect("UTF-16LE")
@@ -4592,7 +4594,9 @@ mod tests {
             .decode(encoded)
             .unwrap();
         let words = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
             .collect::<Vec<_>>();
         let script = String::from_utf16(&words).unwrap();
