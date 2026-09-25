@@ -268,6 +268,7 @@ fn global_menu_opens_from_sidebar_and_routes_client_actions() {
     assert!(text.contains("settings"));
     assert!(text.contains("keybinds"));
     assert!(text.contains("reload config"));
+    assert!(text.contains("sort spaces by name"));
     assert!(text.contains("detach"));
 
     let keybinds = state.hits.global_menu_rows[1].0;
@@ -280,14 +281,127 @@ fn global_menu_opens_from_sidebar_and_routes_client_actions() {
     assert!(help.actions.is_empty());
     assert!(matches!(state.overlay, Some(ClientShellOverlay::Help(_))));
 
+    let detach_index =
+        super::super::global_menu::global_menu_items(state.snapshot.as_deref().expect("snapshot"))
+            .iter()
+            .position(|(_, action)| {
+                *action
+                    == super::super::global_menu::ClientGlobalMenuAction::Binding(
+                        crate::input::KeybindAction::Detach,
+                    )
+            })
+            .expect("detach menu item");
     state.overlay = Some(ClientShellOverlay::GlobalMenu(ClientGlobalMenuOverlay {
-        highlighted: 3,
+        highlighted: detach_index,
     }));
     let detach = state.handle_input_bytes(b"\r");
     assert!(detach.detach);
     assert!(state.overlay.is_none());
 }
 
+#[test]
+fn global_menu_sorts_spaces_by_name() {
+    let mut snapshot = snapshot();
+    let mut zulu = snapshot.workspaces[0].clone();
+    zulu.workspace_id = "ws_zulu".into();
+    zulu.label = "zulu".into();
+    zulu.number = 3;
+    let mut alpha = snapshot.workspaces[0].clone();
+    alpha.workspace_id = "ws_alpha".into();
+    alpha.label = "alpha".into();
+    alpha.number = 1;
+    let mut bravo = snapshot.workspaces[0].clone();
+    bravo.workspace_id = "ws_bravo".into();
+    bravo.label = "bravo".into();
+    bravo.number = 2;
+    snapshot.workspaces = vec![zulu, alpha, bravo];
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot));
+    let sort_index =
+        super::super::global_menu::global_menu_items(state.snapshot.as_deref().expect("snapshot"))
+            .iter()
+            .position(|(label, _)| *label == "sort spaces by name")
+            .expect("sort menu item");
+
+    state.toggle_global_menu();
+    let mut outcome = ClientShellInput::default();
+    state.activate_global_menu_item(sort_index, &mut outcome);
+
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("sorting should use the workspace endpoint");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::WorkspaceMoveBlock(params)
+            if params.workspace_ids == ["ws_alpha", "ws_bravo", "ws_zulu"]
+                && params.before_workspace_id.is_none()
+    ));
+}
+
+#[test]
+fn global_menu_sorts_spaces_by_parent_name() {
+    let mut snapshot = snapshot();
+    let worktree = |key: &str, is_linked_worktree| ClientShellWorktree {
+        key: key.into(),
+        label: key.into(),
+        is_linked_worktree,
+    };
+    let mut zulu = snapshot.workspaces[0].clone();
+    zulu.workspace_id = "ws_zulu".into();
+    zulu.label = "zulu".into();
+    zulu.number = 1;
+    zulu.worktree = Some(worktree("zulu-repo", false));
+    let mut zulu_child = zulu.clone();
+    zulu_child.workspace_id = "ws_zulu_child".into();
+    zulu_child.label = "aaa-child".into();
+    zulu_child.number = 2;
+    zulu_child.branch = Some("worktree/aaa-child".into());
+    zulu_child.worktree = Some(worktree("zulu-repo", true));
+    let mut alpha = zulu.clone();
+    alpha.workspace_id = "ws_alpha".into();
+    alpha.label = "alpha".into();
+    alpha.number = 3;
+    alpha.worktree = Some(worktree("alpha-repo", false));
+    let mut alpha_child = alpha.clone();
+    alpha_child.workspace_id = "ws_alpha_child".into();
+    alpha_child.label = "zzz-child".into();
+    alpha_child.number = 4;
+    alpha_child.branch = Some("worktree/zzz-child".into());
+    alpha_child.worktree = Some(worktree("alpha-repo", true));
+    let mut middle = snapshot.workspaces[0].clone();
+    middle.workspace_id = "ws_middle".into();
+    middle.label = "bravo".into();
+    middle.number = 5;
+    snapshot.workspaces = vec![zulu, zulu_child, alpha, alpha_child, middle];
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot));
+    let sort_index =
+        super::super::global_menu::global_menu_items(state.snapshot.as_deref().expect("snapshot"))
+            .iter()
+            .position(|(label, _)| *label == "sort spaces by name")
+            .expect("sort menu item");
+
+    state.toggle_global_menu();
+    let mut outcome = ClientShellInput::default();
+    state.activate_global_menu_item(sort_index, &mut outcome);
+
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("sorting should use the workspace endpoint");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::WorkspaceMoveBlock(params)
+            if params.workspace_ids == [
+                "ws_alpha",
+                "ws_alpha_child",
+                "ws_middle",
+                "ws_zulu",
+                "ws_zulu_child",
+            ]
+    ));
+}
 #[test]
 fn new_tab_overlay_owns_text_cursor_and_submits_public_api_request() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));

@@ -4,6 +4,7 @@ use super::*;
 pub(super) enum ClientGlobalMenuAction {
     Binding(crate::input::KeybindAction),
     WhatsNew,
+    SortSpacesByName,
 }
 
 pub(super) fn global_menu_attention(snapshot: &ClientShellSnapshot) -> bool {
@@ -17,6 +18,42 @@ pub(super) fn global_menu_item_has_badge(
     (action == ClientGlobalMenuAction::WhatsNew && snapshot.update_available.is_some())
         || (action == ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Settings)
             && snapshot.integration_updates_available)
+}
+
+fn workspace_ids_sorted_by_name(snapshot: &ClientShellSnapshot) -> Vec<String> {
+    let mut blocks = Vec::<Vec<usize>>::new();
+    for entry in super::sidebar::workspace_entries(snapshot, &HashSet::new()) {
+        if entry.indented {
+            if let Some(block) = blocks.last_mut() {
+                block.push(entry.index);
+            } else {
+                blocks.push(vec![entry.index]);
+            }
+        } else {
+            blocks.push(vec![entry.index]);
+        }
+    }
+    for block in &mut blocks {
+        let Some((_, children)) = block.split_first_mut() else {
+            continue;
+        };
+        children.sort_by(|left, right| {
+            snapshot.workspaces[*left]
+                .label
+                .cmp(&snapshot.workspaces[*right].label)
+        });
+    }
+    blocks.sort_by(|left, right| {
+        snapshot.workspaces[left[0]]
+            .label
+            .cmp(&snapshot.workspaces[right[0]].label)
+    });
+    blocks
+        .into_iter()
+        .flatten()
+        .filter_map(|index| snapshot.workspaces.get(index))
+        .map(|workspace| workspace.workspace_id.clone())
+        .collect()
 }
 
 pub(super) fn global_menu_items(
@@ -46,6 +83,10 @@ pub(super) fn global_menu_items(
             ClientGlobalMenuAction::WhatsNew,
         ));
     }
+    items.push((
+        "sort spaces by name",
+        ClientGlobalMenuAction::SortSpacesByName,
+    ));
     items.push((
         "detach",
         ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Detach),
@@ -103,8 +144,33 @@ impl ClientShellState {
             ClientGlobalMenuAction::Binding(binding) => {
                 self.record_binding(crate::input::KeybindMatch::Action(binding), outcome)
             }
+            ClientGlobalMenuAction::SortSpacesByName => self.sort_spaces_by_name(outcome),
             ClientGlobalMenuAction::WhatsNew => self.open_release_notes(),
         }
         outcome.repaint = true;
+    }
+
+    fn sort_spaces_by_name(&mut self, outcome: &mut ClientShellInput) {
+        let Some(snapshot) = self.snapshot.as_deref() else {
+            return;
+        };
+        let workspace_ids = workspace_ids_sorted_by_name(snapshot);
+        let current_ids = snapshot
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.workspace_id.clone())
+            .collect::<Vec<_>>();
+        if workspace_ids == current_ids {
+            return;
+        }
+        self.push_endpoint_method(
+            crate::api::schema::Method::WorkspaceMoveBlock(
+                crate::api::schema::WorkspaceMoveBlockParams {
+                    workspace_ids,
+                    before_workspace_id: None,
+                },
+            ),
+            outcome,
+        );
     }
 }
