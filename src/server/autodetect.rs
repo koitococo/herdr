@@ -2,8 +2,9 @@
 //!
 //! When the user runs `herdr` with no subcommand:
 //! 1. Check if a server is already listening on the client socket
-//! 2. If no server → spawn one as a background daemon → wait for socket readiness (up to 15s)
-//! 3. Attach as a client to the server
+//! 2. If one is listening, attach to it
+//! 3. If none is listening and `--no-create` is present, return an error
+//! 4. Otherwise spawn a background daemon, wait for readiness, then attach
 
 use std::io;
 use std::path::Path;
@@ -292,17 +293,18 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
 // Auto-detect launch
 // ---------------------------------------------------------------------------
 
-/// Performs auto-detect launch: check for server, spawn if needed, then
-/// attach as a thin client.
+/// Performs auto-detect launch: attach to an existing server, or spawn one
+/// unless `no_create` is true.
 ///
 /// This is the entry point called from `main.rs` when the user runs `herdr`
 /// without a subcommand.
 ///
 /// Flow:
 /// 1. Check if a server is listening on the client socket
-/// 2. If no server → spawn server daemon → wait for socket readiness
-/// 3. Run the thin client (which connects to the server)
-pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
+/// 2. If no server and `no_create` is false → spawn server daemon → wait for socket readiness
+/// 3. If no server and `no_create` is true → return an error without spawning or waiting
+/// 4. Run the thin client (which connects to the server)
+pub fn auto_detect_launch(saved_federation: bool, no_create: bool) -> io::Result<()> {
     // The client requires terminal geometry before it can attach. Reject an
     // unusable terminal before socket lookup creates directories or starts a daemon.
     crate::platform::terminal_grid_size().map_err(|err| {
@@ -314,20 +316,33 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
     let socket_path = client_socket_path();
     info!(path = %socket_path.display(), "auto-detect launch starting");
 
-    let startup = is_server_listening().and_then(|listening| {
-        if listening {
+    // Preserve the saved-federation fallback for ordinary startup if probing
+    // itself fails. A definite absence with --no-create is handled below and
+    // must not be swallowed by that fallback.
+    let listening = match is_server_listening() {
+        Ok(listening) => listening,
+        Err(error) if saved_federation && !no_create => {
+            tracing::warn!(%error, "Local startup failed; keeping saved machines available");
+            return crate::client::run_client();
+        }
+        Err(error) => return Err(error),
+    };
+    let action = startup_action(listening, no_create)?;
+    let startup = match action {
+        StartupAction::Attach => {
             info!("server already running, attaching as client");
             if saved_federation {
                 Ok(())
             } else {
                 validate_running_server_compatibility(false)
             }
-        } else {
+        }
+        StartupAction::Spawn => {
             info!("no server running, spawning server daemon");
             spawn_server_daemon()
                 .and_then(|_| wait_for_server_socket(&socket_path, SERVER_READY_TIMEOUT))
         }
-    });
+    };
     if let Err(error) = startup {
         if !saved_federation {
             return Err(error);
@@ -337,6 +352,48 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
 
     // Now attach as a thin client.
     crate::client::run_client()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum StartupAction {
+    Attach,
+    Spawn,
+}
+
+fn startup_action(server_listening: bool, no_create: bool) -> io::Result<StartupAction> {
+    match (server_listening, no_create) {
+        (true, _) => Ok(StartupAction::Attach),
+        (false, false) => Ok(StartupAction::Spawn),
+        (false, true) => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no herdr server is running and --no-create prevents starting one; start a server first or run `herdr` without --no-create",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod startup_decision_tests {
+    use super::{startup_action, StartupAction};
+    use std::io;
+
+    #[test]
+    fn no_create_rejects_missing_server() {
+        let error = startup_action(false, true).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(error.to_string().contains("no herdr server is running"));
+        assert!(error.to_string().contains("--no-create"));
+    }
+
+    #[test]
+    fn no_create_attaches_to_existing_server() {
+        assert_eq!(startup_action(true, true).unwrap(), StartupAction::Attach);
+    }
+
+    #[test]
+    fn default_startup_spawns_when_server_is_absent() {
+        assert_eq!(startup_action(false, false).unwrap(), StartupAction::Spawn);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -493,6 +493,68 @@ where
         .collect()
 }
 
+fn consume_no_create_arg(args: &mut Vec<String>) -> bool {
+    let mut is_program_name = true;
+    let mut before_separator = true;
+    let mut no_create = false;
+    args.retain(|arg| {
+        if is_program_name {
+            is_program_name = false;
+            return true;
+        }
+        if before_separator && arg == "--" {
+            before_separator = false;
+            return true;
+        }
+        if before_separator && arg == "--no-create" {
+            no_create = true;
+            return false;
+        }
+        true
+    });
+    no_create
+}
+
+fn write_root_options(output: &mut impl io::Write) -> io::Result<()> {
+    writeln!(output, "Options:")?;
+    writeln!(
+        output,
+        "  --session <name>    Use or create a named persistent session"
+    )?;
+    writeln!(
+        output,
+        "  --machine <label-or-id>  Run an API command on a saved SSH machine"
+    )?;
+    writeln!(
+        output,
+        "  --remote <target>   Attach through SSH to a remote Herdr server"
+    )?;
+    writeln!(output, "  --remote-keybindings <local|server>")?;
+    writeln!(
+        output,
+        "                      Keybindings for --remote app attach (default: local)"
+    )?;
+    writeln!(
+        output,
+        "  --no-create         Attach only to an existing server; do not start one"
+    )?;
+    writeln!(
+        output,
+        "  --handoff           Opt into live handoff for update or remote attach"
+    )?;
+    writeln!(
+        output,
+        "  --default-config    Print default configuration and exit"
+    )?;
+    writeln!(
+        output,
+        "  --skill             Print the agent skill file and exit"
+    )?;
+    writeln!(output, "  --version, -V       Print version and exit")?;
+    writeln!(output, "  --help, -h          Show this help")?;
+    writeln!(output)
+}
+
 fn finish_cli(outcome: io::Result<cli::CommandOutcome>) -> io::Result<()> {
     match outcome {
         Ok(cli::CommandOutcome::Handled(code)) => std::process::exit(code),
@@ -511,7 +573,7 @@ fn finish_cli(outcome: io::Result<cli::CommandOutcome>) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
+    let mut raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
         Ok(args) => args,
         Err(err) => {
             eprintln!("error: {err}");
@@ -519,6 +581,7 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    let no_create = consume_no_create_arg(&mut raw_args);
     if let Some(outcome) = cli::maybe_run_machine(&raw_args) {
         return finish_cli(outcome);
     }
@@ -699,18 +762,10 @@ fn main() -> io::Result<()> {
         println!("Advanced commands:");
         println!("  {:<32} Run as headless server", "herdr server");
         println!();
-        println!("Options:");
-        println!("  --session <name>    Use or create a named persistent session");
-        println!("  --machine <label-or-id>  Run an API command on a saved SSH machine");
-        println!("  --remote <target>   Attach through SSH to a remote Herdr server");
-        println!("  --remote-keybindings <local|server>");
-        println!("                      Keybindings for --remote app attach (default: local)");
-        println!("  --handoff           Opt into live handoff for update or remote attach");
-        println!("  --default-config    Print default configuration and exit");
-        println!("  --skill             Print the agent skill file and exit");
-        println!("  --version, -V       Print version and exit");
-        println!("  --help, -h          Show this help");
-        println!();
+        {
+            let mut stdout = io::stdout().lock();
+            write_root_options(&mut stdout)?;
+        }
         println!("Config: {}", config::config_path().display());
         println!("Logs:   {}", logging::help_log_paths_summary());
         println!("Env:    HERDR_CONFIG_PATH overrides config file path");
@@ -797,7 +852,7 @@ fn main() -> io::Result<()> {
 
     let saved_federation =
         client::endpoint::EndpointCatalog::load().is_ok_and(|catalog| catalog.has_enabled_ssh());
-    if let Err(err) = server::autodetect::auto_detect_launch(saved_federation) {
+    if let Err(err) = server::autodetect::auto_detect_launch(saved_federation, no_create) {
         eprintln!("herdr: {err}");
         std::process::exit(1);
     }
@@ -849,6 +904,32 @@ mod tests {
         assert!(NESTED_HERDR_MESSAGES
             .iter()
             .all(|message| !message.starts_with("herdr:")));
+    }
+
+    #[test]
+    fn no_create_is_consumed_before_dispatch_but_not_after_separator() {
+        let mut args = ["herdr", "--no-create", "server", "--", "--no-create"]
+            .map(str::to_string)
+            .to_vec();
+        assert!(consume_no_create_arg(&mut args));
+        assert_eq!(args, ["herdr", "server", "--", "--no-create"]);
+
+        let mut trailing = ["herdr", "--", "--no-create"].map(str::to_string).to_vec();
+        assert!(!consume_no_create_arg(&mut trailing));
+        assert_eq!(trailing, ["herdr", "--", "--no-create"]);
+
+        let mut with_value = ["herdr", "--no-create=true"].map(str::to_string).to_vec();
+        assert!(!consume_no_create_arg(&mut with_value));
+        assert_eq!(with_value, ["herdr", "--no-create=true"]);
+    }
+
+    #[test]
+    fn root_help_documents_no_create_startup_behavior() {
+        let mut output = Vec::new();
+        write_root_options(&mut output).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("--no-create"));
+        assert!(output.contains("Attach only to an existing server; do not start one"));
     }
 
     #[cfg(unix)]

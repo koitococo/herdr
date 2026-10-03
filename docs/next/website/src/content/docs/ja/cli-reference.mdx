@@ -11,6 +11,7 @@ Herdr の CLI は、インテグレーションやエージェントが使うの
 
 ```bash
 herdr                         # デフォルトセッションを起動またはアタッチ
+herdr --no-create             # 実行中のサーバーにのみ接続。自動作成・デーモン化せず、利用可能なサーバーがなければ失敗
 herdr --remote workbox        # SSH 越しにアタッチ (ローカルのキーバインドを使用)
 herdr --default-config        # デフォルト設定を表示
 herdr update                  # 設定済みチャンネルからダウンロードしてインストール

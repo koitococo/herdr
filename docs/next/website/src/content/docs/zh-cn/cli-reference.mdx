@@ -11,6 +11,7 @@ Herdr 的 CLI 通过与集成和智能体相同的本地 socket API 与运行中
 
 ```bash
 herdr                         # 启动或连接默认会话
+herdr --no-create             # 只连接已运行的服务器；不会自动创建或以守护进程方式启动；无可用服务器时失败
 herdr --remote workbox        # 通过 SSH 连接,使用本地按键绑定
 herdr --default-config        # 打印默认配置
 herdr update                  # 从配置的通道下载并安装

@@ -11,6 +11,7 @@ pub(super) fn command() -> Command {
         .disable_help_flag(true)
         .disable_version_flag(true)
         .arg(help_flag())
+        .arg(flag("no-create").help("Attach only to an existing server; do not start one"))
         .arg(option("session", "NAME").help("Use or create a named persistent session"))
         .arg(option("machine", "LABEL-OR-ID").help("Run an API command on a saved SSH machine"))
         .arg(option("remote", "TARGET").help("Attach through SSH to a remote Herdr server"))
@@ -1081,6 +1082,23 @@ mod tests {
     #[test]
     fn spec_passes_clap_invariants() {
         super::command().debug_assert();
+    }
+
+    #[test]
+    fn root_spec_advertises_no_create_as_a_boolean_launch_option() {
+        let command = super::command();
+        let no_create = option_arg(&command, "no-create");
+        assert!(matches!(no_create.get_action(), clap::ArgAction::SetTrue));
+        assert_eq!(
+            no_create.get_help().unwrap().to_string(),
+            "Attach only to an existing server; do not start one"
+        );
+        assert!(command
+            .try_get_matches_from(["herdr", "--no-create"])
+            .is_ok());
+        assert!(super::command()
+            .try_get_matches_from(["herdr", "--no-create", "completion", "zsh"])
+            .is_ok());
     }
 
     #[test]
