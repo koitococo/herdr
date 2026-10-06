@@ -1,0 +1,54 @@
+name: Sync upstream tag
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Dispatches from non-default refs still operate on the repository's default branch;
+# serialize every run against that one branch.
+concurrency:
+  group: upstream-tag-sync-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'koitococo/herdr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve repository default branch
+        id: default-branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch)"
+          if [[ -z "${branch}" ]]; then
+            echo "::error::Could not resolve the repository default branch."
+            exit 1
+          fi
+          printf 'name=%s\n' "$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout default branch
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ steps.default-branch.outputs.name }}
+          fetch-depth: 0
+          # Workflow-file updates can exceed GITHUB_TOKEN permissions; push then
+          # fails and requires manual intervention rather than a token fallback.
+          token: ${{ github.token }}
+          persist-credentials: true
+
+      - name: Configure Git bot identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync newest eligible upstream tag
+        env:
+          UPSTREAM_SYNC_URL: https://github.com/ogulcancelik/herdr.git
+          UPSTREAM_SYNC_BRANCH: ${{ steps.default-branch.outputs.name }}
+        run: python3 scripts/sync_upstream_tag.py --upstream-url "$UPSTREAM_SYNC_URL" --branch "$UPSTREAM_SYNC_BRANCH"
