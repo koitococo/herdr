@@ -14,7 +14,7 @@ Herdr launches or attaches to your default background session. You do not manage
 ## Create a workspace
 
 When a session has no workspaces, Herdr opens one automatically. A workspace is a project-level container for panes and agents. Give each active project its own workspace to keep agent state readable.
-The desktop uses Spaces (workspaces) for separate layouts. Tab identity remains available through compatibility APIs, and legacy mobile views can navigate existing tabs; creating or mutating tabs is not supported.
+The desktop uses Spaces (workspaces) for separate layouts. Tab identity remains available through compatibility APIs, and legacy mobile views can navigate existing tabs. `tab.create` creates a separate Space, `tab.focus` focuses the owning Space, and `tab.close` closes that whole Space; these remain API/CLI operations rather than a desktop tab UI. `tab.rename` and `tab.move` remain unsupported.
 
 ## Use the mouse
 

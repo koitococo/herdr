@@ -1206,9 +1206,6 @@ impl PendingEndpointActivation {
                         .iter()
                         .any(|pane| pane.focused && &pane.pane_id == pane_id)
             }
-            Some(crate::client::shell::ClientEndpointFocusTarget::Tab(tab_id)) => {
-                evidence.focused_tab_id.as_deref() == Some(tab_id)
-            }
             Some(crate::client::shell::ClientEndpointFocusTarget::Workspace(workspace_id)) => {
                 evidence.focused_workspace_id.as_deref() == Some(workspace_id)
             }

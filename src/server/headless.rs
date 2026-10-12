@@ -2906,11 +2906,14 @@ impl HeadlessServer {
         let _ = msg.respond_to.send(response);
     }
 
+    // TabFocus and TabClose pre-drain topology before validation and context selection,
+    // so they skip this drain.
     fn handle_api_request_with_shutdown_check_inner(
         &mut self,
         msg: api::ApiRequestMessage,
         skip_default_workspace_for_request: bool,
         client_local: bool,
+        drain_internal_events: bool,
     ) -> bool {
         if self.shutting_down || self.host_shutdown_requested() {
             // During shutdown, respond with server_unavailable.
@@ -2983,7 +2986,9 @@ impl HeadlessServer {
                 &msg.request.method,
                 api::schema::Method::ServerStop(_) | api::schema::Method::ServerLiveHandoff(_)
             );
-        changed |= self.drain_all_internal_events_with_forwarding();
+        if drain_internal_events {
+            changed |= self.drain_all_internal_events_with_forwarding();
+        }
         if self.host_shutdown_requested() {
             Self::reject_api_request_for_shutdown(msg);
             return changed;

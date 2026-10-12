@@ -199,7 +199,15 @@ herdr tab close <tab_id>
 
 互換性のため、`tab create` は指定した元のワークスペースにタブを追加するのではなく、最初のタブとルートペインを持つ独立したワークスペース（Space）を作成します。`--workspace` は作成先ではなく元のワークスペースを指定し、`--cwd` を指定しても既存のワークスペースでなければなりません。省略時はアクティブなワークスペースを使い、アクティブなものがない場合は `workspace_not_found` になります。`--cwd` があれば新しいターミナルの作業ディレクトリに優先されます。ない場合は、元のワークスペースのフォーカス中ペインと既存の `terminal.new_cwd` ポリシーが決定します。`--env` は通常の新規ターミナル環境ルールを使い、`--label` は新しいワークスペースと最初のタブの両方に名前を付けます。デフォルトでは新しい Space にフォーカスを移しません。`--focus` は新しい Space をアクティブにし、`--no-focus` はデフォルトを明示します。
 
-レスポンスは引き続き `.result.tab` と `.result.root_pane` を返し、`.result.tab.workspace_id` が新しい Space を示します。返されたタブが元のワークスペースに属すると仮定しないでください。`tab.focus` は既にアクティブなタブに対する場合のみ no-op で成功し、別のタブへのフォーカス要求は `multi_tab_unsupported` になります。`tab.rename` と `tab.close` も同じエラーになります。プロトコルとスナップショット形式は移行されず、この変更でタブ UI が追加されることもありません。
+レスポンスは引き続き `.result.tab` と `.result.root_pane` を返し、`.result.tab.workspace_id` が新しい Space を示します。返されたタブが元のワークスペースに属すると仮定しないでください。
+
+`tab.focus <tab_id>` は、そのタブが属するワークスペース（Space）にフォーカスします。従来の複数タブワークスペースで、指定した非アクティブタブ自体を選択する操作ではありません。レスポンスの `TabInfo` は実際にアクティブなタブを表し、client-shell endpoint ではそのクライアントが保持するタブビューを表します。両コマンドは先に ID を検証し、不明な ID はフォーカスやクローズの状態を変えずに `tab_not_found` を返します。
+
+`tab.close <tab_id>` は対象タブだけでなく、所属するワークスペース全体を閉じます。その Space の全タブ、ペイン、PTY、プラグインレコードが閉じられます。成功時は `Ok` を返し、`tab.closed` ではなく `workspace.closed`（`WorkspaceClosed`）を発行します。リンクされた worktree ワークスペースが開いている親 worktree のクローズは `workspace_group_close_required` で拒否され、何も閉じません。グループ全体を明示的に閉じる場合は `herdr workspace close <workspace_id> --group` を使ってください。
+
+CLI によるクローズは即時です。`ui.confirm_close` が制御するのは TUI のキーバインドやメニューの確認だけです。
+
+`tab.rename` と `tab.move` は引き続きサポートされません。プロトコルとスナップショット形式は移行されず、この変更でタブ UI が追加されることもありません。
 
 ## ペイン
 

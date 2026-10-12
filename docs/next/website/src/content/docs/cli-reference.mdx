@@ -216,12 +216,28 @@ Space does not take focus; `--focus` activates it, while `--no-focus` makes the
 default explicit.
 
 The response still returns `.result.tab` and `.result.root_pane`;
-`.result.tab.workspace_id` identifies the new Space. Callers must not assume
-that the returned tab belongs to the source workspace. `tab.focus` is a no-op
-only for the already-active tab; focusing another tab returns
-`multi_tab_unsupported`. `tab.rename`, `tab.move`, and `tab.close` also return
-that error. The protocol and snapshot format are not migrated, and this change
-does not add tab UI.
+`.result.tab.workspace_id` identifies the new Space. Do not assume the
+returned tab belongs to the source workspace.
+
+Calling `tab.focus <tab_id>` focuses the workspace (Space) that owns the tab;
+it does not select the requested tab inside a legacy multi-tab workspace. It
+returns `TabInfo` for the actual active tab; on a client-shell endpoint, that
+is the tab retained by that client. Both commands validate the tab ID first;
+an unknown ID returns `tab_not_found` without changing focus or closing
+anything.
+
+`tab.close <tab_id>` closes the entire owning workspace, not just the tab: all
+of its tabs, panes, PTYs, and plugin records are closed. Success returns `Ok`
+and emits `workspace.closed` (`WorkspaceClosed`), not `tab.closed`. If this is
+a primary worktree workspace with linked workspaces still open, it returns
+`workspace_group_close_required` and closes nothing. To intentionally close
+the group, use `herdr workspace close <workspace_id> --group`.
+
+The CLI command is immediate; `ui.confirm_close` controls only TUI
+keybinding/menu confirmations.
+
+`tab.rename` and `tab.move` remain unsupported. The protocol and snapshot
+format are not migrated, and this change does not add tab UI.
 
 ## Panes
 

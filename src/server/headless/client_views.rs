@@ -50,39 +50,6 @@ pub(super) fn forward_proxied_api_response(
     result
 }
 
-fn forward_client_shell_tab_focus_response(
-    proxy: Option<(
-        std::sync::mpsc::Sender<String>,
-        std::sync::mpsc::Receiver<String>,
-    )>,
-) -> bool {
-    let Some((respond_to, response_rx)) = proxy else {
-        return false;
-    };
-    let Ok(response) = response_rx.recv() else {
-        return false;
-    };
-    let Ok(mut success) = serde_json::from_str::<api::schema::SuccessResponse>(&response) else {
-        let _ = respond_to.send(response);
-        return false;
-    };
-    let is_tab_info = if let api::schema::ResponseResult::TabInfo { tab } = &mut success.result {
-        // `TabInfo.focused` describes the client-shell projection here. The server-global
-        // active tab remains untouched by this endpoint-lane-only operation.
-        tab.focused = true;
-        true
-    } else {
-        false
-    };
-    let response = if is_tab_info {
-        serde_json::to_string(&success).unwrap_or(response)
-    } else {
-        response
-    };
-    let _ = respond_to.send(response);
-    is_tab_info
-}
-
 impl HeadlessServer {
     pub(super) fn default_shell_target(&self) -> Option<crate::ui::TabSurfaceTarget> {
         let workspace_index = self.app.state.active?;
@@ -326,8 +293,30 @@ impl HeadlessServer {
 
         matches!(
             method,
-            Method::TabCreate(_) | Method::TabMove(_) | Method::TabRename(_) | Method::TabClose(_)
+            Method::TabCreate(_) | Method::TabMove(_) | Method::TabRename(_)
         )
+    }
+
+    fn tab_focus_has_no_workspace_effect(&self, method: &api::schema::Method) -> bool {
+        matches!(
+            method,
+            api::schema::Method::TabFocus(target)
+                if self.app.parse_tab_id(&target.tab_id).is_none()
+        )
+    }
+
+    fn tab_close_has_no_workspace_effect(&self, method: &api::schema::Method) -> bool {
+        match method {
+            api::schema::Method::TabClose(target) => self
+                .app
+                .parse_tab_id(&target.tab_id)
+                .is_none_or(|(workspace_index, _)| {
+                    self.app
+                        .state
+                        .workspace_close_would_close_worktree_group(workspace_index)
+                }),
+            _ => false,
+        }
     }
 
     fn public_request_may_change_geometry(method: &api::schema::Method) -> bool {
@@ -394,7 +383,19 @@ impl HeadlessServer {
                 true
             }
             api::schema::Method::TabFocus(target) => {
-                self.focus_shell_client_on_tab(client_id, &target.tab_id)
+                let Some((workspace_index, _)) = self.app.parse_tab_id(&target.tab_id) else {
+                    return false;
+                };
+                let workspace_id = self.app.public_workspace_id(workspace_index);
+                let Some(location) = self
+                    .clients
+                    .get_mut(&client_id)
+                    .and_then(|client| client.shell_location.as_mut())
+                else {
+                    return false;
+                };
+                location.focus_workspace(workspace_id);
+                true
             }
             api::schema::Method::PaneFocus(target) => self
                 .app
@@ -858,6 +859,22 @@ impl HeadlessServer {
         &mut self,
         mut msg: api::ApiRequestMessage,
     ) -> bool {
+        if self.shutting_down {
+            return self.handle_api_request_with_shutdown_check_inner(msg, false, false, true);
+        }
+        // Resolve navigation against the latest topology before projecting client context.
+        let tab_focus_requested = matches!(&msg.request.method, api::schema::Method::TabFocus(_));
+        let tab_close_requested = matches!(&msg.request.method, api::schema::Method::TabClose(_));
+        let topology_events_changed = if tab_focus_requested || tab_close_requested {
+            self.drain_all_internal_events_with_forwarding()
+        } else {
+            false
+        };
+        if tab_close_requested && self.tab_close_has_no_workspace_effect(&msg.request.method) {
+            let changed =
+                self.handle_api_request_with_shutdown_check_inner(msg, false, false, false);
+            return topology_events_changed | changed;
+        }
         let target_before = self.default_shell_target();
         let popup_before = self.app.state.popup_pane.is_some();
         let method_claims_geometry = Self::public_request_may_change_geometry(&msg.request.method);
@@ -872,14 +889,16 @@ impl HeadlessServer {
                         tab_index: workspace.active_tab_index(),
                     })
                 }),
-            api::schema::Method::TabFocus(params) => {
-                self.app
-                    .parse_tab_id(&params.tab_id)
-                    .map(|(workspace_index, tab_index)| crate::ui::TabSurfaceTarget {
+            api::schema::Method::TabFocus(params) => self
+                .app
+                .parse_tab_id(&params.tab_id)
+                .and_then(|(workspace_index, _)| {
+                    let workspace = self.app.state.workspaces.get(workspace_index)?;
+                    Some(crate::ui::TabSurfaceTarget {
                         workspace_index,
-                        tab_index,
+                        tab_index: workspace.active_tab_index(),
                     })
-            }
+                }),
             api::schema::Method::PaneFocus(params) => self
                 .app
                 .parse_pane_id(&params.pane_id)
@@ -905,15 +924,35 @@ impl HeadlessServer {
             &msg.request.method,
             api::schema::Method::PaneMove(params) if params.focus
         );
-        let response_proxy = (agent_focus_target.is_some() || inspect_pane_move).then(|| {
-            let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
-            let original = std::mem::replace(&mut msg.respond_to, proxy_tx);
-            (original, proxy_rx)
-        });
+        let response_proxy = (agent_focus_target.is_some()
+            || inspect_pane_move
+            || tab_focus_requested
+            || tab_close_requested)
+            .then(|| {
+                let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
+                let original = std::mem::replace(&mut msg.respond_to, proxy_tx);
+                (original, proxy_rx)
+            });
         let reconcile = Self::shell_locations_may_need_reconcile(&msg.request.method);
-        let changed = self.handle_api_request_with_shutdown_check_inner(msg, false, false);
+        // TabFocus and TabClose skip the inner drain after the topology preflight.
+        let changed = self.handle_api_request_with_shutdown_check_inner(
+            msg,
+            false,
+            false,
+            !tab_focus_requested && !tab_close_requested,
+        );
         let proxied_result = forward_proxied_api_response(response_proxy);
         let proxied_request_succeeded = proxied_result.is_some();
+        let tab_focus_succeeded = tab_focus_requested
+            && matches!(
+                &proxied_result,
+                Some(api::schema::ResponseResult::TabInfo { .. })
+            );
+        let tab_close_succeeded = tab_close_requested
+            && matches!(&proxied_result, Some(api::schema::ResponseResult::Ok {}));
+        let tab_focus_or_close_succeeded = (!tab_focus_requested && !tab_close_requested)
+            || tab_focus_succeeded
+            || tab_close_succeeded;
         // Same-tab and zoomed moves succeed without moving or requesting focus.
         let pane_move_focus_succeeded = inspect_pane_move
             && matches!(
@@ -932,9 +971,23 @@ impl HeadlessServer {
                 })
             })
             .flatten();
+        let successful_public_focus_target = if tab_focus_requested {
+            match &proxied_result {
+                Some(api::schema::ResponseResult::TabInfo { tab }) => self
+                    .app
+                    .parse_tab_id(&tab.tab_id)
+                    .map(|(workspace_index, tab_index)| crate::ui::TabSurfaceTarget {
+                        workspace_index,
+                        tab_index,
+                    }),
+                _ => None,
+            }
+        } else {
+            explicit_public_focus_target
+        };
         let target_changed = self.default_shell_target() != target_before;
         let explicit_focus_succeeded = successful_agent_focus_target
-            .or(explicit_public_focus_target)
+            .or(successful_public_focus_target)
             .is_some_and(|target| self.default_shell_target() == Some(target));
         let public_focus_succeeded = explicit_focus_succeeded
             || (create_focus_requested && target_changed)
@@ -942,16 +995,17 @@ impl HeadlessServer {
         if public_focus_succeeded {
             self.focus_all_shell_clients_on_default_target();
         }
-        if reconcile
+        if (reconcile && tab_focus_or_close_succeeded)
             || target_changed
             || pane_move_focus_succeeded
             || self.app.state.popup_pane.is_some() != popup_before
         {
             self.reconcile_client_shell_locations();
         }
-        let geometry_changed =
-            method_claims_geometry && self.reapply_controlled_shell_tab_geometry(false);
-        changed | geometry_changed
+        let geometry_changed = method_claims_geometry
+            && tab_focus_or_close_succeeded
+            && self.reapply_controlled_shell_tab_geometry(false);
+        changed | topology_events_changed | geometry_changed
     }
 
     pub(super) fn handle_client_shell_api_request(
@@ -959,14 +1013,30 @@ impl HeadlessServer {
         client_id: u64,
         mut msg: api::ApiRequestMessage,
     ) -> bool {
+        if self.shutting_down {
+            return self.handle_api_request_with_shutdown_check_inner(msg, false, true, true);
+        }
+        let tab_focus_requested = matches!(&msg.request.method, api::schema::Method::TabFocus(_));
+        let tab_close_requested = matches!(&msg.request.method, api::schema::Method::TabClose(_));
+        let topology_events_changed = if tab_focus_requested || tab_close_requested {
+            self.drain_all_internal_events_with_forwarding()
+        } else {
+            false
+        };
+        if tab_focus_requested && self.tab_focus_has_no_workspace_effect(&msg.request.method) {
+            let changed =
+                self.handle_api_request_with_shutdown_check_inner(msg, false, true, false);
+            return topology_events_changed | changed;
+        }
+        if tab_close_requested && self.tab_close_has_no_workspace_effect(&msg.request.method) {
+            let changed =
+                self.handle_api_request_with_shutdown_check_inner(msg, false, true, false);
+            return topology_events_changed | changed;
+        }
         let tab_create_focus_requested = matches!(
             &msg.request.method,
             api::schema::Method::TabCreate(params) if params.focus
         );
-        let local_tab_focus_target = match &msg.request.method {
-            api::schema::Method::TabFocus(target) => Some(target.clone()),
-            _ => None,
-        };
         // Resolve an omitted source from this endpoint's location without changing App focus.
         if let api::schema::Method::TabCreate(params) = &mut msg.request.method {
             if params.workspace_id.is_none() {
@@ -976,24 +1046,20 @@ impl HeadlessServer {
                 }
             }
         }
-        let preserve_client_shell_location = local_tab_focus_target.is_some()
-            || Self::shell_endpoint_preserves_client_location_on_tab_mutation(&msg.request.method);
+        let preserve_client_shell_location =
+            Self::shell_endpoint_preserves_client_location_on_tab_mutation(&msg.request.method);
         let focus_before = self.shell_focus_target(client_id);
         let focused_tabs_before = self.focused_shell_tabs();
         let method_claims_geometry = Self::shell_endpoint_claims_geometry(&msg.request.method);
         let reconcile = Self::shell_locations_may_need_reconcile(&msg.request.method);
         let all_focus_before = reconcile.then(|| self.shell_focus_targets());
-        // Keep the public App::handle_tab_focus policy intact. A client shell's TabFocus is a
-        // read-only projection change, so route its response through TabGet after the common
-        // shutdown/response handling has been retained.
-        let local_tab_focus_response = local_tab_focus_target.as_ref().map(|target| {
-            let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
-            let original = std::mem::replace(&mut msg.respond_to, proxy_tx);
-            msg.request.method = api::schema::Method::TabGet(target.clone());
-            (original, proxy_rx)
-        });
         // Keep the endpoint location until creation succeeds; failed creates must not navigate it.
         let tab_create_response = tab_create_focus_requested.then(|| {
+            let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
+            let original = std::mem::replace(&mut msg.respond_to, proxy_tx);
+            (original, proxy_rx)
+        });
+        let tab_focus_or_close_response = (tab_focus_requested || tab_close_requested).then(|| {
             let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
             let original = std::mem::replace(&mut msg.respond_to, proxy_tx);
             (original, proxy_rx)
@@ -1008,7 +1074,27 @@ impl HeadlessServer {
         };
         let popup_before = self.app.state.popup_pane.is_some();
         let popup_owner = self.shell_tab_id_for_client(client_id);
-        let changed = self.handle_api_request_with_shutdown_check_inner(msg, false, true);
+        // TabFocus and TabClose skip the inner drain after their topology preflight.
+        let changed = self.handle_api_request_with_shutdown_check_inner(
+            msg,
+            false,
+            true,
+            !tab_focus_requested && !tab_close_requested,
+        );
+        let tab_result = forward_proxied_api_response(tab_focus_or_close_response);
+        let tab_focus_succeeded = tab_focus_requested
+            && matches!(
+                &tab_result,
+                Some(api::schema::ResponseResult::TabInfo { .. })
+            );
+        let tab_close_succeeded =
+            tab_close_requested && matches!(&tab_result, Some(api::schema::ResponseResult::Ok {}));
+        let tab_request_succeeded = (!tab_focus_requested && !tab_close_requested)
+            || tab_focus_succeeded
+            || tab_close_succeeded;
+        if tab_close_succeeded {
+            navigation_changed |= self.set_default_shell_target_from_client(client_id);
+        }
         let local_tab_create_focus_succeeded =
             match forward_proxied_api_response(tab_create_response) {
                 Some(api::schema::ResponseResult::TabCreated { tab, .. }) => {
@@ -1016,59 +1102,55 @@ impl HeadlessServer {
                 }
                 _ => false,
             };
-        let local_tab_focus_succeeded =
-            forward_client_shell_tab_focus_response(local_tab_focus_response);
-        let local_navigation_changed = if local_tab_focus_succeeded {
-            local_tab_focus_target
-                .as_ref()
-                .is_some_and(|target| self.focus_shell_client_on_tab(client_id, &target.tab_id))
-        } else {
-            false
-        };
-        navigation_changed |= local_navigation_changed;
         navigation_changed |= local_tab_create_focus_succeeded;
-        if !preserve_client_shell_location {
+        // TabFocus projects only the requested Workspace; retain its remembered Tab.
+        if !preserve_client_shell_location
+            && !tab_focus_requested
+            && ((!tab_close_requested) || tab_request_succeeded)
+        {
             self.focus_shell_client_on_default_target(client_id);
         }
         if !popup_before && self.app.state.popup_pane.is_some() {
             self.popup_owner_tab_id = popup_owner;
         }
-        if reconcile || self.app.state.popup_pane.is_some() != popup_before {
+        if (reconcile && tab_request_succeeded)
+            || self.app.state.popup_pane.is_some() != popup_before
+        {
             self.reconcile_client_shell_locations();
         }
         let focus_after = self.shell_focus_target(client_id);
-        if local_tab_focus_target.is_some() {
-            // The local projection must never participate in session-wide focus tracking.
-            self.app.accept_current_focus_without_events();
-        } else if let Some(all_focus_before) = all_focus_before {
-            self.finish_shell_location_reconciliation(all_focus_before, &focused_tabs_before);
+        if let Some(all_focus_before) = all_focus_before {
+            if tab_request_succeeded {
+                self.finish_shell_location_reconciliation(all_focus_before, &focused_tabs_before);
+            } else {
+                self.app.accept_current_focus_without_events();
+            }
         } else {
             let focused_tabs_after = self.focused_shell_tabs();
             self.app.accept_current_focus_without_events();
-            self.send_shell_navigation_focus_events(
-                focus_before.as_ref(),
-                focus_after.as_ref(),
-                &focused_tabs_before,
-                &focused_tabs_after,
-            );
+            if tab_request_succeeded {
+                self.send_shell_navigation_focus_events(
+                    focus_before.as_ref(),
+                    focus_after.as_ref(),
+                    &focused_tabs_before,
+                    &focused_tabs_after,
+                );
+            }
         }
-        if focus_before != focus_after {
+        if tab_request_succeeded && focus_before != focus_after {
             if let Some(target) = focus_after {
                 self.app
                     .emit_focus_api_events(target.workspace_index, target.pane_id);
             }
         }
         let geometry_changed = method_claims_geometry
-            && if local_tab_focus_target.is_some() {
-                local_navigation_changed
-                    && (self.claim_shell_tab_geometry(client_id, false)
-                        || self.resize_shell_tab_if_controller(client_id, false))
-            } else if preserve_client_shell_location && !local_tab_create_focus_succeeded {
+            && tab_request_succeeded
+            && if preserve_client_shell_location && !local_tab_create_focus_succeeded {
                 false
             } else {
                 self.claim_shell_tab_geometry(client_id, false)
                     || self.resize_shell_tab_if_controller(client_id, false)
             };
-        changed | navigation_changed | geometry_changed
+        changed | topology_events_changed | navigation_changed | geometry_changed
     }
 }

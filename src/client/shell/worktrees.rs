@@ -467,9 +467,11 @@ impl ClientShellState {
             ) => {
                 self.overlay = None;
                 self.push_endpoint_method(
-                    crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
-                        tab_id: tab.tab_id,
-                    }),
+                    crate::api::schema::Method::WorkspaceFocus(
+                        crate::api::schema::WorkspaceTarget {
+                            workspace_id: tab.workspace_id,
+                        },
+                    ),
                     outcome,
                 );
                 true

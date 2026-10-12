@@ -48,7 +48,14 @@ Herdr はマウスネイティブです。キーバインドをひとつも覚�
 | 次 / 前のタブ | `prefix+n` / `prefix+p` |
 | タブ 1–9 にジャンプ | `prefix+1..9` |
 | タブの名前を変更 | `prefix+shift+t` |
-| タブを閉じる | `prefix+shift+x` |
+| ワークスペース（全タブ）を閉じる | `prefix+shift+x` |
+
+従来の `keys.close_tab`（「タブを閉じる」）バインドは、個別のタブではなく
+アクティブなワークスペースとそのすべてのタブ・ペインを閉じます。
+`ui.confirm_close` が有効な場合、Herdr は先に確認します。この TUI の確認は
+CLI や raw API リクエストには適用されません。worktree グループを暗黙に
+閉じることもありません。グループを明示的に閉じる場合は
+`herdr workspace close <workspace_id> --group` を使ってください。
 
 ワークスペースとセッション:
 

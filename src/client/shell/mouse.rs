@@ -1490,12 +1490,18 @@ impl ClientShellState {
                 return;
             }
             if let Some(press) = self.tab_press.take() {
-                self.push_endpoint_method(
-                    crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
-                        tab_id: press.tab_id,
-                    }),
-                    outcome,
-                );
+                let current_owner =
+                    self.endpoint_tab_workspace_id(&self.active_endpoint_id, &press.tab_id);
+                if current_owner.as_deref() == Some(press.workspace_id.as_str()) {
+                    self.push_endpoint_method(
+                        crate::api::schema::Method::WorkspaceFocus(
+                            crate::api::schema::WorkspaceTarget {
+                                workspace_id: press.workspace_id,
+                            },
+                        ),
+                        outcome,
+                    );
+                }
                 return;
             }
         }

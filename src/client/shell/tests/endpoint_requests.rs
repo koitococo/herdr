@@ -120,7 +120,7 @@ fn worktree_create_leaves_server_focus_unchanged() {
 }
 
 #[test]
-fn worktree_create_success_focuses_returned_tab_on_its_endpoint_after_snapshot_update() {
+fn worktree_create_success_focuses_returned_workspace_on_its_endpoint_after_snapshot_update() {
     for use_remote in [false, true] {
         let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
         state.set_snapshot(Box::new(snapshot()));
@@ -154,7 +154,8 @@ fn worktree_create_success_focuses_returned_tab_on_its_endpoint_after_snapshot_u
         assert_eq!(target_boot, &boot_id);
         assert!(matches!(
             &request.method,
-            crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_2"
+            crate::api::schema::Method::WorkspaceFocus(target)
+                if target.workspace_id == "ws_2"
         ));
         assert!(state
             .handle_endpoint_result(
@@ -164,6 +165,30 @@ fn worktree_create_success_focuses_returned_tab_on_its_endpoint_after_snapshot_u
             )
             .1
             .is_empty());
+    }
+}
+
+#[test]
+fn tab_navigation_keybinds_focus_the_tab_owner_space() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut projected = snapshot();
+    let mut legacy_tab = projected.tabs[0].clone();
+    legacy_tab.tab_id = "legacy-tab".into();
+    legacy_tab.number = 2;
+    legacy_tab.focused = false;
+    projected.tabs.push(legacy_tab);
+    state.set_snapshot(Box::new(projected));
+
+    for action in [
+        crate::input::KeybindAction::SwitchTab(1),
+        crate::input::KeybindAction::PreviousTab,
+        crate::input::KeybindAction::NextTab,
+    ] {
+        assert!(matches!(
+            state.endpoint_method_for_action(action),
+            Some(crate::api::schema::Method::WorkspaceFocus(target))
+                if target.workspace_id == "ws_1"
+        ));
     }
 }
 

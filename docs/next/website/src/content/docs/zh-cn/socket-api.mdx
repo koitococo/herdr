@@ -107,13 +107,21 @@ herdr pane read w1:p2 --source recent --lines 50
 | 集成 | `integration.install`、`integration.uninstall` |
 | 插件 | `plugin.link`、`plugin.list`、`plugin.unlink`、`plugin.enable`、`plugin.disable`、`plugin.action.list`、`plugin.action.invoke`、`plugin.log.list`、`plugin.pane.open`、`plugin.pane.focus`、`plugin.pane.close` |
 
-标签页记录、`tab_id` 字段和 `HERDR_TAB_ID` 仍属于协议和运行时。`tab.list` 和 `tab.get` 仍可使用，包括读取从旧版多标签快照恢复的记录。
+标签页记录、`tab_id` 字段和 `HERDR_TAB_ID` 仍属于协议和运行时。`tab.list` 和 `tab.get` 仍可使用，包括读取从旧版多标签快照恢复的记录。这不保证全局只有一个标签页；桌面 UI 不会显示这些隐藏标签页。
 
 为保持兼容，`tab.create` 会创建一个带有初始标签页和根窗格的独立工作区（Space），而不是向 `workspace_id` 指定的来源工作区添加标签页。`workspace_id` 选择来源工作区；即使提供 `cwd`，它也必须是有效的现有工作区。省略时使用活动工作区；没有活动工作区则返回 `workspace_not_found`。
 
 显式 `cwd` 优先决定新终端的工作目录；否则由来源工作区的焦点窗格和现有 `terminal.new_cwd` 策略决定。`env` 遵循普通新终端环境规则；`label` 同时设置新工作区和初始标签页的名称。`focus` 默认为 `false`，保留当前活动工作区；设为 `true` 时激活新工作区。
 
-`TabCreated` 载荷仍为 `{tab, root_pane}`；`tab.workspace_id` 标识新 Space。`tab.create` 会为新工作区发出 `workspace.created`、`tab.created`、`pane.created` 和 `layout.updated`。调用方不能假定返回的标签页属于来源工作区。`tab.focus` 仅在目标已经是活动标签页时作为 no-op 成功；请求聚焦其他标签页会返回 `multi_tab_unsupported`。`tab.move`、`tab.close` 和 `tab.rename` 也会返回同一错误。协议和快照格式未迁移，此更改也不会添加标签页 UI。
+`TabCreated` 载荷仍为 `{tab, root_pane}`；`tab.workspace_id` 标识新 Space。`tab.create` 会为新工作区发出 `workspace.created`、`tab.created`、`pane.created` 和 `layout.updated`。调用方不能假定返回的标签页属于来源工作区。
+
+`tab.focus` 会先验证 `tab_id`，然后聚焦该标签页所属的工作区；它不会在旧版多标签工作区中选择请求的标签页。它返回描述实际活动标签页的 `TabInfo`。在 client-shell endpoint 上，响应反映该客户端保留的标签页视图。未知 ID 返回 `tab_not_found`，不会改变服务器焦点、客户端位置或终端尺寸。
+
+`tab.close` 会先验证 `tab_id`，然后按常规的非分组关闭方式关闭其所属工作区。它会关闭整个 Space 中的所有标签页、窗格、PTY 和插件记录，而不只是目标标签页。成功时返回 `Ok` 并发出 `workspace.closed`（`WorkspaceClosed`），而不是 `tab.closed`。如果仍有已关联的 worktree 工作区打开，主工作区会受 `workspace_group_close_required` 保护。只有显式通过 `workspace.close` 请求关闭整个组时才会关闭（`close_group: true`；CLI 命令：`herdr workspace close <workspace_id> --group`）。
+
+`ui.confirm_close` 只控制 TUI 按键绑定/菜单确认；raw socket `tab.close` 请求会立即执行，不会弹出确认。
+
+`tab.rename` 和 `tab.move` 仍不受支持。协议和快照格式未迁移，此更改也不会添加标签页 UI。
 
 `agent.wait` 由服务器拥有并由事件驱动。它会固定到已解析的窗格占用者,因此替换后的智能体不能满足该等待。`agent.prompt` 接受可选的 `wait` 对象,其中包含 `until` 和 `timeout_ms`;这样可在一个请求中提交提示并开始等待,避免两个独立调用之间的竞态。如果解析出的智能体已经是 `blocked`,`agent.prompt` 不会发送输入或开始等待,而是返回 `agent_blocked`。
 

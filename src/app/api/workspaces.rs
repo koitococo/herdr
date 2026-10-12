@@ -10,6 +10,11 @@ use crate::app::App;
 use super::super::api_helpers::{normalize_metadata_source, normalize_metadata_ttl};
 use super::responses::{encode_error, encode_success};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WorkspaceCloseError {
+    GroupRequired,
+}
+
 impl App {
     pub(super) fn handle_workspace_list(&mut self, id: String) -> String {
         encode_success(
@@ -91,7 +96,7 @@ impl App {
         if self.state.workspaces.get(index).is_none() {
             return workspace_not_found(id, &target.workspace_id);
         }
-        self.state.switch_workspace(index);
+        self.focus_workspace_index(index);
 
         encode_success(
             id,
@@ -99,6 +104,10 @@ impl App {
                 workspace: self.workspace_info(index),
             },
         )
+    }
+
+    pub(super) fn focus_workspace_index(&mut self, index: usize) {
+        self.state.switch_workspace(index);
     }
 
     pub(super) fn handle_workspace_rename(
@@ -327,12 +336,24 @@ impl App {
         if let Err(response) = self.require_restored_group_close_ready(&id, &close_indices) {
             return response;
         }
-        if close_indices.len() >= 2 && !params.close_group {
-            return encode_error(
-                id,
-                "workspace_group_close_required",
-                "workspace has linked worktree workspaces; use --group (close_group=true in the API) to close the group",
-            );
+        match self.close_workspace_index(index, params.close_group) {
+            Ok(()) => encode_success(id, ResponseResult::Ok {}),
+            Err(WorkspaceCloseError::GroupRequired) => workspace_close_group_required(id),
+        }
+    }
+
+    pub(super) fn close_workspace_index(
+        &mut self,
+        index: usize,
+        close_group: bool,
+    ) -> Result<(), WorkspaceCloseError> {
+        let close_indices = if close_group {
+            self.state.workspace_group_close_indices(index)
+        } else {
+            self.state.workspace_close_indices(index)
+        };
+        if close_indices.len() >= 2 && !close_group {
+            return Err(WorkspaceCloseError::GroupRequired);
         }
         let closed_workspaces = close_indices
             .iter()
@@ -355,8 +376,7 @@ impl App {
                 },
             });
         }
-
-        encode_success(id, ResponseResult::Ok {})
+        Ok(())
     }
 
     fn workspace_list_info(&self) -> Vec<crate::api::schema::WorkspaceInfo> {
@@ -367,6 +387,14 @@ impl App {
             .map(|(idx, _)| self.workspace_info(idx))
             .collect()
     }
+}
+
+pub(super) fn workspace_close_group_required(id: String) -> String {
+    encode_error(
+        id,
+        "workspace_group_close_required",
+        "workspace has linked worktree workspaces; use --group (close_group=true in the API) to close the group",
+    )
 }
 
 fn workspace_not_found(id: String, workspace_id: &str) -> String {
@@ -606,6 +634,12 @@ mod tests {
                     app.pending_restored_worktree_spaces
                         .push((pending_id.clone(), expected.clone()));
                     let parent_pane = app.state.workspaces[0].tabs[0].root_pane;
+                    let workspace_ids = app
+                        .state
+                        .workspaces
+                        .iter()
+                        .map(|workspace| workspace.id.clone())
+                        .collect::<Vec<_>>();
                     let request = serde_json::json!({
                         "id": "req",
                         "method": if method == "group" { "workspace.close" } else { method },
@@ -632,13 +666,32 @@ mod tests {
                             valid,
                         },
                     );
+                    let ready = app.workspace_list_info();
                     let response = app.handle_api_request(serde_json::from_value(request).unwrap());
-                    if valid && method == "workspace.close" {
+                    if valid && matches!(method, "workspace.close" | "tab.close") {
                         let response: ErrorResponse = serde_json::from_str(&response).unwrap();
                         assert_eq!(response.error.code, "workspace_group_close_required");
+                        assert_eq!(app.workspace_list_info(), ready);
+                        assert!(app.state.terminal_runtime_shutdowns.is_empty());
+                        assert!(app.event_hub.events_after(0).is_empty());
                     } else {
-                        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
-                        assert_eq!(app.state.workspaces.len(), if valid { 1 } else { 2 });
+                        let response: SuccessResponse = serde_json::from_str(&response).unwrap();
+                        if method == "tab.close" {
+                            assert!(matches!(response.result, ResponseResult::Ok {}));
+                        }
+                        let surviving_ids = if valid {
+                            vec![workspace_ids[1].clone()]
+                        } else {
+                            workspace_ids[1..].to_vec()
+                        };
+                        assert_eq!(
+                            app.state
+                                .workspaces
+                                .iter()
+                                .map(|workspace| workspace.id.clone())
+                                .collect::<Vec<_>>(),
+                            surviving_ids
+                        );
                     }
                     app.state.assert_invariants_for_test();
                 }

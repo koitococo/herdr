@@ -13,7 +13,7 @@ Herdr 是一个终端工作区管理器。它让真实的终端进程持续运�
 
 ## 标签页
 
-标签页仍是工作区内布局的运行时/API 身份。桌面 UI 没有标签栏，不同布局应使用 Spaces。为保持兼容，`tab.create` 会创建一个带有初始标签页和根窗格的独立工作区，而不是向来源工作区添加标签页；调用方不能假定新标签页属于来源工作区。`tab.list` 和 `tab.get` 可检查标签页记录，包括从旧版多标签快照恢复的记录。`tab.focus` 仅在目标已经是活动标签页时作为 no-op 成功；聚焦其他标签页以及 `tab.rename`、`tab.move`、`tab.close` 会返回 `multi_tab_unsupported`。协议和快照格式未迁移，此更改也不会添加标签页 UI。
+标签页仍是工作区内布局的运行时/API 身份。桌面 UI 没有标签栏，不同布局应使用 Spaces。为保持兼容，`tab.create` 会创建一个带有初始标签页和根窗格的独立工作区，而不是向来源工作区添加标签页；调用方不能假定新标签页属于来源工作区。`tab.list` 和 `tab.get` 可检查标签页记录，包括从旧版多标签快照恢复的记录。旧版快照中的多标签状态仍然有效；这并不保证全局永远只有一个标签页，桌面 UI 也不会展示这些隐藏标签页。`tab.focus` 会聚焦标签页所属的工作区，而不是选择请求的隐藏标签页；它返回描述实际活动标签页的 `TabInfo`（client-shell endpoint 返回该客户端保留的标签页视图）。`tab.close` 会关闭整个所属 Space，包括其中所有标签页、窗格、PTY 和插件记录，成功时返回 `Ok` 并发出 `workspace.closed`（`WorkspaceClosed`），而不是 `tab.closed`。如果 worktree 组保护返回 `workspace_group_close_required`，请运行 `herdr workspace close <workspace_id> --group` 明确关闭整个组。`tab.rename` 和 `tab.move` 仍不受支持。协议和快照格式未迁移，此更改也不会添加标签页 UI。
 
 ## 窗格
 

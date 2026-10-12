@@ -48,7 +48,14 @@ Tabs:
 | Next / previous tab | `prefix+n` / `prefix+p` |
 | Jump to tab 1–9 | `prefix+1..9` |
 | Rename tab | `prefix+shift+t` |
-| Close tab | `prefix+shift+x` |
+| Close workspace (all tabs) | `prefix+shift+x` |
+
+The legacy `keys.close_tab` (“Close tab”) binding closes the active workspace
+and all its tabs and panes, not a single tab. When `ui.confirm_close` is
+enabled, Herdr asks for confirmation first. This TUI confirmation does not
+apply to CLI or raw API requests. It does not implicitly close a
+linked-worktree group; use `herdr workspace close <workspace_id> --group` when
+you explicitly intend that.
 
 Workspaces and session:
 

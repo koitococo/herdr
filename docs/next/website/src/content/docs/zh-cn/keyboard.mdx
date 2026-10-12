@@ -48,7 +48,13 @@ Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智�
 | 下一个 / 上一个标签页 | `prefix+n` / `prefix+p` |
 | 跳转到标签页 1–9 | `prefix+1..9` |
 | 重命名标签页 | `prefix+shift+t` |
-| 关闭标签页 | `prefix+shift+x` |
+| 关闭工作区（所有标签页） | `prefix+shift+x` |
+
+旧的 `keys.close_tab`（“关闭标签页”）绑定会关闭活动工作区及其所有标签页和
+窗格，而不只是单个标签页。启用 `ui.confirm_close` 时，Herdr 会先要求确认。
+这种 TUI 确认不适用于 CLI 或 raw API 请求；它也不会隐式关闭 worktree 组。
+若要显式关闭整个组，请运行
+`herdr workspace close <workspace_id> --group`。
 
 工作区与会话:
 

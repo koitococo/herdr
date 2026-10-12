@@ -634,7 +634,7 @@ command = ["sh", "./read.sh", "action"]
 [[panes]]
 id = "read"
 title = "Read"
-placement = "tab"
+placement = "split"
 command = ["sh", "./read.sh", "pane"]
 "#;
     fs::write(source_repo.join("herdr-plugin.toml"), manifest).unwrap();
@@ -746,6 +746,8 @@ mv "$HERDR_PLUGIN_ROOT/result-$kind.tmp" "$HERDR_PLUGIN_ROOT/result-$kind"
                 "example.live",
                 "--entrypoint",
                 "read",
+                "--placement",
+                "split",
             ],
         );
         assert_eq!(pane["result"]["type"], "plugin_pane_opened");

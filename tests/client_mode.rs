@@ -1278,8 +1278,10 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
             if screen_text().contains("LOCAL_INPUT_RECOVERED") {
                 return true;
             }
+            // The fence can open between keystrokes; a truncated quoted probe
+            // would leave the shell in its continuation prompt across retries.
             input
-                .write_all(b"printf 'LOCAL_%s\\n' INPUT_RECOVERED\r")
+                .write_all(b"printf LOCAL_%s\\\\n INPUT_RECOVERED\r")
                 .unwrap();
             false
         }),

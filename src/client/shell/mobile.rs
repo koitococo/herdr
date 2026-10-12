@@ -1052,13 +1052,16 @@ impl ClientShellState {
                 endpoint_id,
                 tab_id,
             }) => {
-                if self.focus_or_activate(
-                    endpoint_id,
-                    ClientEndpointFocusTarget::Tab(tab_id),
-                    outcome,
-                ) {
-                    self.mode = ClientShellMode::Terminal;
-                    self.navigate_workspace_id = None;
+                let workspace_id = self.endpoint_tab_workspace_id(&endpoint_id, &tab_id);
+                if let Some(workspace_id) = workspace_id {
+                    if self.focus_or_activate(
+                        endpoint_id,
+                        ClientEndpointFocusTarget::Workspace(workspace_id),
+                        outcome,
+                    ) {
+                        self.mode = ClientShellMode::Terminal;
+                        self.navigate_workspace_id = None;
+                    }
                 }
             }
             Some(ClientMobileTarget::NewTab) => {

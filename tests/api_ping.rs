@@ -812,19 +812,30 @@ fn tab_read_methods_and_tab_create_redirect_over_socket() {
     );
     assert_eq!(unknown_focus["error"]["code"], "tab_not_found");
 
-    let rejected_close = send_request(
+    let focused_space = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t7","method":"tab.close","params":{{"tab_id":"{}"}}}}"#,
+            r#"{{"id":"req_t7","method":"tab.focus","params":{{"tab_id":"{}"}}}}"#,
             first_tab_id
         ),
     );
-    assert_eq!(rejected_close["error"]["code"], "multi_tab_unsupported");
+    assert_eq!(focused_space["result"]["type"], "tab_info");
+    assert_eq!(focused_space["result"]["tab"]["tab_id"], first_tab_id);
+    assert_eq!(focused_space["result"]["tab"]["focused"], true);
+
+    let closed_space = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"req_t8","method":"tab.close","params":{{"tab_id":"{}"}}}}"#,
+            new_tab_id
+        ),
+    );
+    assert_eq!(closed_space["result"]["type"], "ok");
 
     let tab_list_after = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t8","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
+            r#"{{"id":"req_t9","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
             workspace_id
         ),
     );
@@ -832,7 +843,16 @@ fn tab_read_methods_and_tab_create_redirect_over_socket() {
     let original_tabs_after = tab_list_after["result"]["tabs"].as_array().unwrap();
     assert_eq!(original_tabs_after.len(), 1);
     assert_eq!(original_tabs_after[0]["tab_id"], first_tab_id);
-    assert_eq!(original_tabs_after[0]["focused"], false);
+    assert_eq!(original_tabs_after[0]["focused"], true);
+    let workspaces_after_close = send_request(
+        &socket_path,
+        r#"{"id":"req_t10","method":"workspace.list","params":{}}"#,
+    );
+    assert!(workspaces_after_close["result"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|workspace| workspace["workspace_id"] != new_workspace_id));
 
     cleanup_spawned_herdr(child, base);
 }
@@ -1696,7 +1716,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
 
 #[cfg(not(target_os = "macos"))]
 #[test]
-fn events_subscribe_streams_workspace_close_events_without_rejected_tab_events() {
+fn events_subscribe_streams_tab_close_as_workspace_close() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -1717,10 +1737,6 @@ fn events_subscribe_streams_workspace_close_events_without_rejected_tab_events()
         .as_str()
         .unwrap()
         .to_string();
-    let first_tab_id = created["result"]["workspace"]["active_tab_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
 
     let mut reader = open_subscription(
         &socket_path,
@@ -1731,25 +1747,53 @@ fn events_subscribe_streams_workspace_close_events_without_rejected_tab_events()
     assert_eq!(ack["id"], "sub_life_c");
     assert_eq!(ack["result"]["type"], "subscription_started");
 
-    let rejected_close = send_request(
+    let created_space = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_tc_2","method":"tab.close","params":{{"tab_id":"{}"}}}}"#,
-            first_tab_id
+            r#"{{"id":"req_tc_2","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
+            workspace_id
         ),
     );
-    assert_eq!(rejected_close["error"]["code"], "multi_tab_unsupported");
+    assert_eq!(created_space["result"]["type"], "tab_created");
+    let created_workspace_id = created_space["result"]["tab"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let created_tab_id = created_space["result"]["tab"]["tab_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let closed_space = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"req_tc_3","method":"tab.close","params":{{"tab_id":"{}"}}}}"#,
+            created_tab_id
+        ),
+    );
+    assert_eq!(closed_space["result"]["type"], "ok");
+
+    let workspace_closed = reader.read_json_line(Duration::from_secs(2));
+    assert_eq!(workspace_closed["event"], "workspace_closed");
+    assert_eq!(
+        workspace_closed["data"]["workspace_id"],
+        created_workspace_id
+    );
+    assert_eq!(
+        workspace_closed["data"]["workspace"]["workspace_id"],
+        created_workspace_id
+    );
     assert!(
         reader
-            .try_read_json_line(Duration::from_millis(500))
+            .try_read_json_line(Duration::from_millis(250))
             .is_none(),
-        "rejected tab close emitted an event"
+        "closing a tab target emits workspace.closed, not tab.closed"
     );
 
     let renamed_ws = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_tc_3","method":"workspace.rename","params":{{"workspace_id":"{}","label":"renamed"}}}}"#,
+            r#"{{"id":"req_tc_4","method":"workspace.rename","params":{{"workspace_id":"{}","label":"renamed"}}}}"#,
             workspace_id
         ),
     );
@@ -1762,7 +1806,10 @@ fn events_subscribe_streams_workspace_close_events_without_rejected_tab_events()
 
     let closed_ws = send_request(
         &socket_path,
-        r#"{"id":"req_tc_4","method":"workspace.close","params":{"workspace_id":"1"}}"#,
+        &format!(
+            r#"{{"id":"req_tc_5","method":"workspace.close","params":{{"workspace_id":"{}"}}}}"#,
+            workspace_id
+        ),
     );
     assert_eq!(closed_ws["result"]["type"], "ok");
 

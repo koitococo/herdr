@@ -153,7 +153,11 @@ Every configured prefix enters the same prefix mode and starts every `prefix+...
 
 The default keymap is prefix-first so Herdr does not steal input from shells, editors, tmux, or terminal apps. Search `keys.` in the [Config reference](/docs/config-reference/) to see every action and default binding. The in-app help panel at `prefix+?` shows the active bindings.
 
-Desktop tab-action bindings remain parsed for compatibility but cannot create, switch, move, close, or rename tabs. Use workspace bindings for separate layouts.
+Other desktop tab-action bindings remain parsed for compatibility but cannot
+create, switch, move, or rename tabs. The legacy `Close tab` binding closes
+the active workspace and all its tabs; `ui.confirm_close` controls the TUI
+confirmation. CLI/API requests remain immediate. Use workspace bindings for
+separate layouts.
 
 
 A binding may also be an array when one action needs multiple shortcuts:

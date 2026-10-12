@@ -133,7 +133,7 @@ fn surface_success(id: &str, active: bool, projection_revision: u64) -> Vec<u8> 
     .unwrap()
 }
 
-fn workspace_focus_success(id: &str, workspace_id: &str) -> Vec<u8> {
+fn workspace_focus_success(id: &str, workspace_id: &str, active_tab_id: &str) -> Vec<u8> {
     serde_json::to_vec(&crate::api::schema::SuccessResponse {
         id: id.into(),
         result: crate::api::schema::ResponseResult::WorkspaceInfo {
@@ -144,7 +144,7 @@ fn workspace_focus_success(id: &str, workspace_id: &str) -> Vec<u8> {
                 focused: true,
                 pane_count: 1,
                 tab_count: 1,
-                active_tab_id: "tab".into(),
+                active_tab_id: active_tab_id.into(),
                 agent_status: crate::api::schema::AgentStatus::Unknown,
                 tokens: Default::default(),
                 worktree: None,
@@ -506,7 +506,7 @@ fn stale_generation_and_boot_are_not_activation_evidence() {
         SurfaceActivationProgress::Stale
     );
     assert_eq!(
-        activation.receive_surface(&endpoint(), 7, surface("old-boot", 1, "pane")),
+        activation.receive_snapshot(&endpoint(), 7, &test_snapshot("old-boot", 1)),
         SurfaceActivationProgress::Stale
     );
 }
@@ -584,7 +584,7 @@ fn same_target_retarget_is_latest_wins() {
             &target,
             7,
             &old_focus,
-            &workspace_focus_success(&old_focus, "old"),
+            &workspace_focus_success(&old_focus, "old", "remembered-tab"),
             &mut endpoints,
         ),
         SurfaceActivationProgress::Pending
@@ -604,6 +604,172 @@ fn same_target_retarget_is_latest_wins() {
         .unwrap();
     assert_ne!(latest_focus, old_focus);
     assert!(activation.accepts_response(&target, 7, "remote-boot", &latest_focus));
+}
+
+#[test]
+fn owner_space_focus_accepts_a_different_remembered_tab() {
+    let (mut shell, mut endpoints, _local_sent, remote_sent) = shell_and_registry();
+    let target = endpoint();
+    let owner_workspace = "owner-space";
+    let mut activation = PendingEndpointActivation::begin(
+        &shell,
+        &mut endpoints,
+        target.clone(),
+        Some(crate::client::shell::ClientEndpointFocusTarget::Workspace(
+            owner_workspace.into(),
+        )),
+        resize(),
+        33,
+        Instant::now(),
+    )
+    .unwrap();
+    let source_release_id = "client-shell-surface:33:off";
+    assert_eq!(
+        activation.receive_response(
+            &ClientEndpointId::Local,
+            1,
+            source_release_id,
+            &surface_success(source_release_id, false, 1),
+            &mut endpoints,
+        ),
+        SurfaceActivationProgress::Pending
+    );
+    let focus_request = remote_sent
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|message| {
+            let crate::protocol::ClientMessage::ClientShellEndpointRequest { request, .. } =
+                message
+            else {
+                return None;
+            };
+            let request = serde_json::from_str::<crate::api::schema::Request>(request).ok()?;
+            request
+                .id
+                .starts_with("client-shell-focus:")
+                .then_some(request)
+        })
+        .expect("owner-space focus request");
+    assert!(matches!(
+        &focus_request.method,
+        crate::api::schema::Method::WorkspaceFocus(params)
+            if params.workspace_id == owner_workspace
+    ));
+
+    let target_activation_id = "client-shell-surface:33:on";
+    assert_eq!(
+        activation.receive_response(
+            &target,
+            7,
+            target_activation_id,
+            &surface_success(target_activation_id, true, 2),
+            &mut endpoints,
+        ),
+        SurfaceActivationProgress::Pending
+    );
+    assert_eq!(
+        activation.receive_response(
+            &target,
+            7,
+            &focus_request.id,
+            &workspace_focus_success(&focus_request.id, owner_workspace, "remembered-tab"),
+            &mut endpoints,
+        ),
+        SurfaceActivationProgress::Pending
+    );
+
+    let mut projected = test_snapshot("remote-boot", 2);
+    projected.focused_workspace_id = Some(owner_workspace.into());
+    projected.focused_tab_id = Some("remembered-tab".into());
+    shell.set_endpoint_snapshot_for_generation(&target, 7, Box::new(projected.clone()));
+    assert_eq!(
+        activation.receive_snapshot(&target, 7, &projected),
+        SurfaceActivationProgress::Pending
+    );
+    assert_eq!(
+        activation.receive_surface(&target, 7, surface("remote-boot", 2, "remote-pane")),
+        SurfaceActivationProgress::Ready
+    );
+}
+
+#[test]
+fn focus_result_for_another_space_is_rejected() {
+    let (_shell, mut endpoints, _local_sent, _remote_sent) = shell_and_registry();
+    let target = endpoint();
+    let expected_workspace = "owner-space";
+    let request_id = "client-shell-focus:3:1";
+    let mut activation = machine();
+    activation.focus = Some(crate::client::shell::ClientEndpointFocusTarget::Workspace(
+        expected_workspace.into(),
+    ));
+    let ActivationPhase::ActivatingTarget {
+        focus_request_id,
+        focus_request_target,
+        focus_acknowledged,
+        ..
+    } = &mut activation.phase
+    else {
+        unreachable!()
+    };
+    *focus_request_id = Some(request_id.into());
+    *focus_request_target = Some(crate::client::shell::ClientEndpointFocusTarget::Workspace(
+        expected_workspace.into(),
+    ));
+    *focus_acknowledged = false;
+
+    assert_eq!(
+        activation.receive_response(
+            &target,
+            7,
+            request_id,
+            &workspace_focus_success(request_id, "another-space", "remembered-tab"),
+            &mut endpoints,
+        ),
+        SurfaceActivationProgress::Rejected {
+            message: "endpoint focus returned an unexpected result".into(),
+            source_release_rejected: false,
+        }
+    );
+}
+
+#[test]
+fn workspace_focus_never_accepts_a_tab_info_result() {
+    let expected = crate::client::shell::ClientEndpointFocusTarget::Workspace("owner-space".into());
+    let result = crate::api::schema::ResponseResult::TabInfo {
+        tab: crate::api::schema::TabInfo {
+            tab_id: "remembered-tab".into(),
+            workspace_id: "owner-space".into(),
+            number: 1,
+            label: "remembered".into(),
+            focused: true,
+            pane_count: 1,
+            agent_status: crate::api::schema::AgentStatus::Unknown,
+        },
+    };
+
+    assert!(!super::focus_result_matches(Some(&expected), &result));
+}
+
+#[test]
+fn focused_snapshot_for_another_space_cannot_complete_activation() {
+    let target = endpoint();
+    let expected_workspace = "owner-space";
+    let mut activation = machine();
+    activation.focus = Some(crate::client::shell::ClientEndpointFocusTarget::Workspace(
+        expected_workspace.into(),
+    ));
+    let mut projected = test_snapshot("remote-boot", 1);
+    projected.focused_workspace_id = Some("another-space".into());
+
+    assert_eq!(
+        activation.receive_snapshot(&target, 7, &projected),
+        SurfaceActivationProgress::Pending
+    );
+    assert_eq!(
+        activation.receive_surface(&target, 7, surface("remote-boot", 1, "remote-pane")),
+        SurfaceActivationProgress::Pending
+    );
 }
 
 #[test]

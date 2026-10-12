@@ -459,9 +459,6 @@ impl ClientShellState {
                     workspace_id,
                 })
             }
-            ClientEndpointFocusTarget::Tab(tab_id) => {
-                crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget { tab_id })
-            }
             ClientEndpointFocusTarget::Pane(pane_id) => {
                 crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget { pane_id })
             }
@@ -865,7 +862,7 @@ impl ClientShellState {
         use crate::api::schema::{
             Method, PaneDirection, PaneFocusDirectionParams, PaneResizeParams, PaneSplitParams,
             PaneSwapParams, PaneTarget, PaneZoomMode, PaneZoomParams, SplitDirection,
-            TabCreateParams, TabMoveParams, TabTarget, WorkspaceTarget,
+            TabCreateParams, TabMoveParams, WorkspaceTarget,
         };
         use crate::input::KeybindAction;
 
@@ -969,8 +966,8 @@ impl ClientShellState {
                     .iter()
                     .filter(|tab| tab.workspace_id == focused_workspace)
                     .collect::<Vec<_>>();
-                Some(Method::TabFocus(TabTarget {
-                    tab_id: tabs.get(index)?.tab_id.clone(),
+                Some(Method::WorkspaceFocus(WorkspaceTarget {
+                    workspace_id: tabs.get(index)?.workspace_id.clone(),
                 }))
             }
             KeybindAction::PreviousTab | KeybindAction::NextTab => {
@@ -987,8 +984,8 @@ impl ClientShellState {
                     1
                 };
                 let next = (current as isize + delta).rem_euclid(tabs.len() as isize) as usize;
-                Some(Method::TabFocus(TabTarget {
-                    tab_id: tabs[next].tab_id.clone(),
+                Some(Method::WorkspaceFocus(WorkspaceTarget {
+                    workspace_id: tabs[next].workspace_id.clone(),
                 }))
             }
             KeybindAction::MoveTabPrevious | KeybindAction::MoveTabNext => {

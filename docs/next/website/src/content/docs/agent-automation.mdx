@@ -15,7 +15,7 @@ Use Herdr as an automation layer for coding agents. A script can control them, o
 
 A pane exists whether or not it contains an agent. An agent is the recognized process currently running inside a pane. `agent start` therefore requires an existing shell pane and never creates, splits, or moves layout.
 
-Creating a workspace also creates its first tab and root pane. The compatibility `tab create` command creates a separate workspace with its own initial tab and root pane; it does not add a tab to its source workspace. Use the returned pane ID for the first process, and split only when that layout needs another terminal.
+Creating a workspace also creates its first tab and root pane. The compatibility `tab create` command creates a separate workspace with its own initial tab and root pane; it does not add a tab to its source workspace. Use the returned pane ID for the first process, and split only when that layout needs another terminal. `herdr tab focus <tab_id>` focuses the owning Space without selecting a hidden tab in a legacy multi-tab workspace; the response describes the actual active `TabInfo` (on a client-shell endpoint, the tab retained by that client). `herdr tab close <tab_id>` closes the entire Space—all tabs, panes, PTYs, and plugin records—and returns `Ok` with `workspace.closed` (`WorkspaceClosed`), not `tab.closed`. If a linked-worktree group guard returns `workspace_group_close_required`, explicitly run `herdr workspace close <workspace_id> --group` to close the group. Tab rename and move remain unsupported.
 
 Creation commands print JSON. Capture IDs from the response instead of predicting them:
 

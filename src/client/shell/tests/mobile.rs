@@ -205,6 +205,13 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
         focused: true,
     });
     projected.workspaces[0].agent_status = AgentStatus::Blocked;
+    let mut legacy_tab = projected.tabs[0].clone();
+    legacy_tab.tab_id = "legacy-tab".into();
+    legacy_tab.number = 2;
+    legacy_tab.label = "legacy".into();
+    legacy_tab.custom_label = true;
+    legacy_tab.focused = false;
+    projected.tabs.push(legacy_tab);
     state.set_snapshot(Box::new(projected));
     let mut projected_surface = surface();
     for cell in &mut projected_surface.frame.cells {
@@ -328,7 +335,7 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
                 ClientMobileTarget::Tab {
                     endpoint_id,
                     tab_id,
-                } if endpoint_id.is_local() && tab_id == "tab_1"
+                } if endpoint_id.is_local() && tab_id == "legacy-tab"
             )
             .then_some(*rect)
         })
@@ -339,9 +346,77 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
         ClientShellAction::Endpoint { request, .. }
             if matches!(
                 &request.method,
-                crate::api::schema::Method::TabFocus(params)
-                    if params.tab_id == "tab_1"
+                crate::api::schema::Method::WorkspaceFocus(params)
+                    if params.workspace_id == "ws_1"
             )
+    )));
+}
+
+#[test]
+fn mobile_legacy_tab_handoff_targets_its_owner_space() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let profile = crate::client::endpoint::SavedSshEndpoint {
+        id: crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+        label: "Build".into(),
+        target: "build".into(),
+        session: "agents".into(),
+        enabled: true,
+    };
+    let remote = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&remote, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(snapshot()));
+    let mut projected = snapshot();
+    projected.boot_id = "remote-boot".into();
+    let mut owner_space = projected.workspaces[0].clone();
+    owner_space.workspace_id = "ws_2".into();
+    owner_space.number = 2;
+    owner_space.label = "owner space".into();
+    owner_space.active_tab_id = "remembered-tab".into();
+    owner_space.focused = false;
+    projected.workspaces.push(owner_space);
+    let mut remembered_tab = projected.tabs[0].clone();
+    remembered_tab.tab_id = "remembered-tab".into();
+    remembered_tab.workspace_id = "ws_2".into();
+    remembered_tab.number = 1;
+    remembered_tab.focused = false;
+    projected.tabs.push(remembered_tab);
+    let mut legacy_tab = projected.tabs[0].clone();
+    legacy_tab.tab_id = "legacy-tab".into();
+    legacy_tab.workspace_id = "ws_2".into();
+    legacy_tab.number = 2;
+    legacy_tab.label = "legacy".into();
+    legacy_tab.focused = false;
+    projected.tabs.push(legacy_tab);
+    state.set_endpoint_snapshot(&remote, Box::new(projected));
+
+    state.mode = ClientShellMode::Navigate;
+    state.compose(44, 20).expect("mobile handoff switcher");
+    let tab_hit = Rect::new(1, 3, 10, 1);
+    state.hits.mobile_targets.clear();
+    state.hits.mobile_targets.push((
+        tab_hit,
+        ClientMobileTarget::Tab {
+            endpoint_id: remote.clone(),
+            tab_id: "legacy-tab".into(),
+        },
+    ));
+    let click = RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: tab_hit.x,
+        row: tab_hit.y,
+        modifiers: KeyModifiers::empty(),
+    });
+
+    let outcome = state.handle_raw_events(vec![click]);
+
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+    assert!(outcome.actions.iter().any(|action| matches!(
+        action,
+        ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Workspace(workspace_id)),
+        } if endpoint_id == &remote && workspace_id == "ws_2"
     )));
 }
 

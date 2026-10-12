@@ -1069,20 +1069,25 @@ impl ClientShellState {
     }
 
     pub(super) fn request_tab_close(&mut self, tab_id: String, outcome: &mut ClientShellInput) {
-        let workspace_id = self.snapshot.as_deref().and_then(|snapshot| {
+        let Some(workspace_id) = self.snapshot.as_deref().and_then(|snapshot| {
             let target = snapshot.tabs.iter().find(|tab| tab.tab_id == tab_id)?;
-            (self.config.confirm_close
-                && !snapshot
-                    .tabs
-                    .iter()
-                    .any(|tab| tab.workspace_id == target.workspace_id && tab.tab_id != tab_id))
-            .then(|| target.workspace_id.clone())
-        });
-        if let Some(workspace_id) = workspace_id {
-            if self.open_close_confirmation(workspace_id, Some(tab_id.clone()), None) {
+            snapshot
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.workspace_id == target.workspace_id)
+                .then(|| target.workspace_id.clone())
+        }) else {
+            return;
+        };
+        if self.config.confirm_close {
+            if self.open_close_confirmation(workspace_id, Some(tab_id), Some(false)) {
                 outcome.repaint = true;
-                return;
+            } else {
+                outcome.repaint |= self.receive_endpoint_unavailable(
+                    "Close target changed; try closing the tab again".into(),
+                );
             }
+            return;
         }
         self.push_endpoint_method(
             crate::api::schema::Method::TabClose(crate::api::schema::TabTarget { tab_id }),
@@ -1213,6 +1218,8 @@ impl ClientShellState {
         };
         let scope = if closes_group {
             format!("{} workspaces, {panes}", group.len())
+        } else if tab_target.is_some() {
+            format!("all tabs, {panes}")
         } else {
             panes
         };

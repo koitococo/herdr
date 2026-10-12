@@ -37,7 +37,7 @@ const LEAVES: [Leaf; 6] = [
     },
     Leaf {
         name: "focus",
-        about: "Focus a tab",
+        about: "Focus the Space containing a tab",
         id: "cli:tab:focus",
         arguments: TabTargetProjection::arguments,
         method: |matches| TabTargetProjection::from_matches(matches).map(Method::TabFocus),
@@ -51,7 +51,7 @@ const LEAVES: [Leaf; 6] = [
     },
     Leaf {
         name: "close",
-        about: "Close a tab",
+        about: "Close the Space containing a tab",
         id: "cli:tab:close",
         arguments: TabTargetProjection::arguments,
         method: |matches| TabTargetProjection::from_matches(matches).map(Method::TabClose),

@@ -34,7 +34,6 @@ pub(super) struct MachineHit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClientEndpointFocusTarget {
     Workspace(String),
-    Tab(String),
     Pane(String),
     #[cfg(windows)]
     Notification {
@@ -290,6 +289,25 @@ impl ClientShellState {
             .snapshot
             .as_deref()
             .map(|snapshot| snapshot.boot_id.as_str())
+    }
+
+    pub(super) fn endpoint_tab_workspace_id(
+        &self,
+        endpoint_id: &ClientEndpointId,
+        tab_id: &str,
+    ) -> Option<String> {
+        let snapshot = self
+            .endpoints
+            .iter()
+            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)?
+            .snapshot
+            .as_deref()?;
+        let tab = snapshot.tabs.iter().find(|tab| tab.tab_id == tab_id)?;
+        snapshot
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.workspace_id == tab.workspace_id)
+            .then(|| tab.workspace_id.clone())
     }
 
     pub(crate) fn endpoint_snapshot_matches(

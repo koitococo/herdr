@@ -538,6 +538,7 @@ pub(super) enum ClientContextMenuTarget {
         collapsed: bool,
     },
     Tab {
+        endpoint_id: ClientEndpointId,
         tab_id: String,
         workspace_id: String,
     },

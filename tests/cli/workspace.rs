@@ -699,7 +699,7 @@ fn worktree_cli_rejects_local_argument_errors_before_socket_use() {
 }
 
 #[test]
-fn tab_reads_and_space_creation_work_while_unsupported_tab_mutations_are_rejected() {
+fn tab_reads_and_space_creation_map_focus_and_close_to_spaces_while_rename_is_rejected() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
@@ -728,8 +728,10 @@ fn tab_reads_and_space_creation_work_while_unsupported_tab_mutations_are_rejecte
     let tab_get = run_cli_json(&socket_path, &["tab", "get", &tab_id]);
     assert_eq!(tab_get["result"]["tab"]["tab_id"], tab_id);
 
-    let focused_tab = run_cli(&socket_path, &["tab", "focus", &tab_id]);
-    assert!(focused_tab.status.success());
+    let focused_tab = run_cli_json(&socket_path, &["tab", "focus", &tab_id]);
+    assert_eq!(focused_tab["result"]["type"], "tab_info");
+    assert_eq!(focused_tab["result"]["tab"]["tab_id"], tab_id);
+    assert_eq!(focused_tab["result"]["tab"]["focused"], true);
 
     let created_space = run_cli_json(
         &socket_path,
@@ -761,26 +763,27 @@ fn tab_reads_and_space_creation_work_while_unsupported_tab_mutations_are_rejecte
         run_cli_json(&socket_path, &["tab", "list", "--workspace", &workspace_id]);
     assert_eq!(source_tabs_after["result"]["tabs"], source_tabs_before);
 
-    let rejected_focus = run_cli(&socket_path, &["tab", "focus", &new_tab_id]);
-    assert!(!rejected_focus.status.success());
-    assert!(
-        String::from_utf8_lossy(&rejected_focus.stderr).contains("multi_tab_unsupported"),
-        "stderr: {}",
-        String::from_utf8_lossy(&rejected_focus.stderr)
-    );
+    let focused_space = run_cli_json(&socket_path, &["tab", "focus", &new_tab_id]);
+    assert_eq!(focused_space["result"]["type"], "tab_info");
+    assert_eq!(focused_space["result"]["tab"]["tab_id"], new_tab_id);
+    assert_eq!(focused_space["result"]["tab"]["focused"], true);
 
-    for args in [
-        vec!["tab", "rename", tab_id.as_str(), "logs"],
-        vec!["tab", "close", tab_id.as_str()],
-    ] {
-        let result = run_cli(&socket_path, &args);
-        assert!(!result.status.success());
-        assert!(
-            String::from_utf8_lossy(&result.stderr).contains("multi_tab_unsupported"),
-            "stderr: {}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-    }
+    let closed_space = run_cli_json(&socket_path, &["tab", "close", &tab_id]);
+    assert_eq!(closed_space["result"]["type"], "ok");
+    let workspaces_after_close = run_cli_json(&socket_path, &["workspace", "list"]);
+    assert!(workspaces_after_close["result"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|workspace| workspace["workspace_id"] != workspace_id));
+
+    let rejected_rename = run_cli(&socket_path, &["tab", "rename", &new_tab_id, "logs"]);
+    assert!(!rejected_rename.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected_rename.stderr).contains("multi_tab_unsupported"),
+        "stderr: {}",
+        String::from_utf8_lossy(&rejected_rename.stderr)
+    );
 
     cleanup_spawned_herdr(herdr, base);
 }

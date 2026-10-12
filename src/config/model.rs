@@ -404,7 +404,7 @@ pub struct KeysConfig {
     pub switch_tab: BindingConfig,
     /// Switch to workspace 1-9 from prefix mode. Unset by default.
     pub switch_workspace: BindingConfig,
-    /// Close the active tab. Default: "prefix+shift+x".
+    /// Close the active workspace and all of its tabs. Default: "prefix+shift+x".
     pub close_tab: BindingConfig,
     /// Rename the focused pane. Default: "prefix+shift+p".
     pub rename_pane: BindingConfig,

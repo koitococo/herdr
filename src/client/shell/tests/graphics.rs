@@ -301,6 +301,7 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
         }),
         ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
             target: ClientContextMenuTarget::Tab {
+                endpoint_id: ClientEndpointId::Local,
                 tab_id: "tab_1".into(),
                 workspace_id: "ws_1".into(),
             },

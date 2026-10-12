@@ -790,6 +790,7 @@ mod tests {
     #[tokio::test]
     async fn layout_apply_starts_every_pane_at_its_final_size() {
         let mut app = app_with_workspace();
+        let original_tab_id = app.public_tab_id(0, 0).unwrap();
         let area = ratatui::layout::Rect::new(0, 0, 120, 40);
         crate::ui::compute_view_without_resizing_panes(
             &mut app.state,
@@ -825,7 +826,7 @@ mod tests {
             "req".into(),
             LayoutApplyParams {
                 workspace_id: None,
-                tab_id: None,
+                tab_id: Some(original_tab_id),
                 tab_label: None,
                 focus: false,
                 root: *root,
@@ -833,8 +834,9 @@ mod tests {
         );
 
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
-        let tab_idx = app.state.workspaces[0].tabs.len() - 1;
-        assert_ne!(app.state.workspaces[0].active_tab_index(), tab_idx);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        let tab_idx = 0;
+        assert_eq!(app.state.workspaces[0].active_tab_index(), tab_idx);
         let sizes = |app: &App| {
             app.state.workspaces[0].tabs[tab_idx]
                 .layout

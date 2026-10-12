@@ -22,10 +22,6 @@ pub(super) fn focus_result_matches(
             Some(crate::client::shell::ClientEndpointFocusTarget::Workspace(expected)),
             crate::api::schema::ResponseResult::WorkspaceInfo { workspace },
         ) => workspace.focused && &workspace.workspace_id == expected,
-        (
-            Some(crate::client::shell::ClientEndpointFocusTarget::Tab(expected)),
-            crate::api::schema::ResponseResult::TabInfo { tab },
-        ) => tab.focused && &tab.tab_id == expected,
         _ => false,
     }
 }
@@ -197,11 +193,6 @@ pub(super) fn focus_request(
         crate::client::shell::ClientEndpointFocusTarget::Pane(pane_id) => {
             crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
                 pane_id: pane_id.clone(),
-            })
-        }
-        crate::client::shell::ClientEndpointFocusTarget::Tab(tab_id) => {
-            crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
-                tab_id: tab_id.clone(),
             })
         }
     };

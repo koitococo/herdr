@@ -636,8 +636,8 @@ fn endpoint_retarget_filters_workspace_candidates_by_target() {
     assert!(!state.pending_workspace_rename_intents.contains_key(&3));
     assert!(state.pending_workspace_rename_intents.contains_key(&4));
 
-    let tab_target = ClientEndpointFocusTarget::Tab("tab_1".into());
-    state.note_endpoint_activation_requested(&remote, Some(&tab_target));
+    let pane_target = ClientEndpointFocusTarget::Pane("pane_1".into());
+    state.note_endpoint_activation_requested(&remote, Some(&pane_target));
     assert!(state.last_workspace_clicks.is_empty());
     assert!(state.pending_workspace_rename_intents.is_empty());
 }

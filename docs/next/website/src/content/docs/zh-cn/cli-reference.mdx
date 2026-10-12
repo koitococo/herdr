@@ -199,7 +199,15 @@ herdr tab close <tab_id>
 
 为保持兼容，`tab create` 会创建一个带有初始标签页和根窗格的独立工作区（Space），而不是向来源工作区添加标签页。`--workspace` 指定来源工作区，而非新工作区；即使提供 `--cwd`，它也必须是有效的现有工作区。省略时使用活动工作区；没有活动工作区则返回 `workspace_not_found`。显式 `--cwd` 优先决定新终端的工作目录；否则由来源工作区的焦点窗格和现有 `terminal.new_cwd` 策略决定。`--env` 遵循普通新终端环境规则，`--label` 同时设置新工作区和初始标签页的名称。默认不会切换到新 Space；`--focus` 激活新 Space，`--no-focus` 显式保留默认行为。
 
-响应仍返回 `.result.tab` 和 `.result.root_pane`；`.result.tab.workspace_id` 标识新 Space。调用方不能假定返回的标签页属于来源工作区。`tab.focus` 仅在目标已经是活动标签页时作为 no-op 成功；请求聚焦其他标签页会返回 `multi_tab_unsupported`。`tab.rename` 和 `tab.close` 也会返回同一错误。协议和快照格式未迁移，此更改也不会添加标签页 UI。
+响应仍返回 `.result.tab` 和 `.result.root_pane`；`.result.tab.workspace_id` 标识新 Space。调用方不能假定返回的标签页属于来源工作区。
+
+`tab.focus <tab_id>` 会聚焦标签页所属的工作区（Space），而不是在旧版多标签工作区中选择请求的非活动标签页。它返回描述实际活动标签页的 `TabInfo`；在 client-shell endpoint 上，该结果反映此客户端保留的标签页视图。两个命令都会先验证标签页 ID；未知 ID 返回 `tab_not_found`，不会改变焦点或关闭任何内容。
+
+`tab.close <tab_id>` 关闭整个所属工作区，而不只是目标标签页：该 Space 中的所有标签页、窗格、PTY 和插件记录都会关闭。成功时返回 `Ok` 并发出 `workspace.closed`（`WorkspaceClosed`），而不是 `tab.closed`。如果该工作区是仍有已关联 worktree 工作区打开的主工作区，则返回 `workspace_group_close_required`，且不会关闭任何内容。若确实要关闭整个组，请显式运行 `herdr workspace close <workspace_id> --group`。
+
+CLI 关闭会立即执行；`ui.confirm_close` 仅控制 TUI 按键绑定/菜单是否要求确认。
+
+`tab.rename` 和 `tab.move` 仍不受支持。协议和快照格式未迁移，此更改也不会添加标签页 UI。
 
 ## 窗格
 

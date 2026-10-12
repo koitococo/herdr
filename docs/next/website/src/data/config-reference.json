@@ -689,7 +689,7 @@
           "key": "keys.close_tab",
           "type": "keybinding",
           "default": "\"prefix+shift+x\"",
-          "description": "Retained keybinding for compatibility; desktop cannot close tabs and the request returns multi_tab_unsupported."
+          "description": "Close the active workspace (Space), including all its tabs and panes. When ui.confirm_close is enabled, the TUI asks for confirmation first."
         },
         {
           "key": "keys.rename_pane",

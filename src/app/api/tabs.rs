@@ -91,21 +91,21 @@ impl App {
     }
 
     pub(super) fn handle_tab_focus(&mut self, id: String, target: TabTarget) -> String {
-        let Some((ws_idx, tab_idx)) = self.parse_tab_id(&target.tab_id) else {
+        let Some((ws_idx, _)) = self.parse_tab_id(&target.tab_id) else {
             return tab_not_found(id, &target.tab_id);
         };
-        let Some(tab) = self.tab_info(ws_idx, tab_idx) else {
+        self.focus_workspace_index(ws_idx);
+        let Some(active_tab_idx) = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .map(crate::workspace::Workspace::active_tab_index)
+        else {
             return tab_not_found(id, &target.tab_id);
         };
-        let is_current_active_tab = self.state.active == Some(ws_idx)
-            && self
-                .state
-                .workspaces
-                .get(ws_idx)
-                .is_some_and(|ws| ws.active_tab_index() == tab_idx);
-        if !is_current_active_tab {
-            return multi_tab_unsupported(id);
-        }
+        let Some(tab) = self.tab_info(ws_idx, active_tab_idx) else {
+            return tab_not_found(id, &target.tab_id);
+        };
 
         encode_success(id, ResponseResult::TabInfo { tab })
     }
@@ -118,8 +118,21 @@ impl App {
         multi_tab_unsupported(id)
     }
 
-    pub(super) fn handle_tab_close(&mut self, id: String, _target: TabTarget) -> String {
-        multi_tab_unsupported(id)
+    pub(super) fn handle_tab_close(&mut self, id: String, target: TabTarget) -> String {
+        let Some((ws_idx, _)) = self.parse_tab_id(&target.tab_id) else {
+            return tab_not_found(id, &target.tab_id);
+        };
+        if let Err(response) = self
+            .require_restored_group_close_ready(&id, &self.state.workspace_close_indices(ws_idx))
+        {
+            return response;
+        }
+        match self.close_workspace_index(ws_idx, false) {
+            Ok(()) => encode_success(id, ResponseResult::Ok {}),
+            Err(super::workspaces::WorkspaceCloseError::GroupRequired) => {
+                super::workspaces::workspace_close_group_required(id)
+            }
+        }
     }
 
     fn tab_list_info(&self, ws_idx: usize) -> Vec<crate::api::schema::TabInfo> {
@@ -593,65 +606,67 @@ mod tests {
     }
 
     #[test]
-    fn api_tab_focus_rejects_legacy_non_active_tab_without_switching() {
+    fn api_tab_focus_preserves_owning_spaces_active_legacy_tab() {
         let mut app = app_with_workspace();
-        app.state.workspaces[0].test_add_tab(Some("legacy"));
-        app.state.workspaces[0].active_tab = 0;
-        let inactive_tab_id = app.public_tab_id(0, 1).unwrap();
+        let mut background = Workspace::test_new("background");
+        let requested_tab = background.test_add_tab(Some("requested"));
+        let active_tab = background.test_add_tab(Some("already active"));
+        background.active_tab = active_tab;
+        app.state.workspaces.push(background);
+        app.state.session_dirty = false;
+        let requested_tab_id = app.public_tab_id(1, requested_tab).unwrap();
+        let active_tab_id = app.public_tab_id(1, active_tab).unwrap();
 
-        let response = app.handle_tab_focus(
-            "req".into(),
-            TabTarget {
-                tab_id: inactive_tab_id,
-            },
-        );
-
-        assert_multi_tab_unsupported(&response);
-        assert_eq!(app.state.active, Some(0));
-        assert_eq!(app.state.workspaces[0].active_tab, 0);
-        assert!(!app.state.session_dirty);
-        assert!(app.event_hub.events_after(0).is_empty());
-    }
-
-    #[test]
-    fn api_tab_focus_rejects_background_workspace_tab_without_switching() {
-        let mut app = app_with_workspace();
-        app.state.workspaces.push(Workspace::test_new("background"));
-        let background_tab_id = app.public_tab_id(1, 0).unwrap();
-
-        let response = app.handle_tab_focus(
-            "req".into(),
-            TabTarget {
-                tab_id: background_tab_id,
-            },
-        );
-
-        assert_multi_tab_unsupported(&response);
-        assert_eq!(app.state.active, Some(0));
-        assert_eq!(app.state.workspaces[1].active_tab, 0);
-        assert!(!app.state.session_dirty);
-        assert!(app.event_hub.events_after(0).is_empty());
-    }
-
-    #[test]
-    fn api_tab_focus_current_active_tab_succeeds_without_switching() {
-        let mut app = app_with_workspace();
-        let active_tab_id = app.public_tab_id(0, 0).unwrap();
-
-        let response = app.handle_tab_focus(
-            "req".into(),
-            TabTarget {
-                tab_id: active_tab_id.clone(),
-            },
-        );
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::TabFocus(TabTarget {
+                tab_id: requested_tab_id.clone(),
+            }),
+        });
 
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
         let ResponseResult::TabInfo { tab } = success.result else {
             panic!("expected tab info");
         };
         assert_eq!(tab.tab_id, active_tab_id);
-        assert_eq!(app.state.active, Some(0));
-        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert!(tab.focused);
+        assert!(!app.tab_info(1, requested_tab).unwrap().focused);
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.selected, 1);
+        assert_eq!(app.state.workspaces[1].active_tab_index(), active_tab);
+        assert!(app.state.session_dirty);
+    }
+
+    #[test]
+    fn api_tab_focus_invalid_id_has_no_navigation_side_effects() {
+        let mut app = app_with_workspace();
+        app.state.workspaces[0].test_add_tab(Some("legacy"));
+        app.state.workspaces[0].active_tab = 0;
+        app.state.session_dirty = false;
+        let active_workspace = app.state.active;
+        let selected_workspace = app.state.selected;
+        let tab_ids = (0..app.state.workspaces[0].tabs.len())
+            .map(|tab_index| app.public_tab_id(0, tab_index).unwrap())
+            .collect::<Vec<_>>();
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::TabFocus(TabTarget {
+                tab_id: "missing-tab".into(),
+            }),
+        });
+
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "tab_not_found");
+        assert_eq!(app.state.active, active_workspace);
+        assert_eq!(app.state.selected, selected_workspace);
+        assert_eq!(app.state.workspaces[0].active_tab_index(), 0);
+        assert_eq!(
+            (0..app.state.workspaces[0].tabs.len())
+                .map(|tab_index| app.public_tab_id(0, tab_index).unwrap())
+                .collect::<Vec<_>>(),
+            tab_ids
+        );
         assert!(!app.state.session_dirty);
         assert!(app.event_hub.events_after(0).is_empty());
     }
@@ -697,15 +712,165 @@ mod tests {
     }
 
     #[test]
-    fn api_tab_close_is_rejected_without_events_or_session_dirty() {
+    fn api_tab_close_closes_owning_space_and_emits_workspace_closed_snapshot() {
         let mut app = app_with_workspace();
+        app.state.workspaces[0].test_add_tab(Some("legacy"));
+        app.state.workspaces.push(Workspace::test_new("survivor"));
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.session_dirty = false;
+        let closed_workspace_id = app.public_workspace_id(0);
+        let closed_workspace = app.workspace_info(0);
+        let closed_pane_ids = app.state.pane_ids_for_workspace(0);
+        let closed_terminal_ids = app.state.terminal_ids_for_workspace(0);
+        let survivor_id = app.public_workspace_id(1);
+        for pane_id in &closed_pane_ids {
+            app.state.plugin_panes.insert(
+                *pane_id,
+                crate::app::state::PluginPaneRecord {
+                    plugin_id: "example.pane".into(),
+                    entrypoint: "board".into(),
+                },
+            );
+        }
+        let requested_tab_id = app.public_tab_id(0, 1).unwrap();
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::TabClose(TabTarget {
+                tab_id: requested_tab_id,
+            }),
+        });
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, ResponseResult::Ok {});
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.public_workspace_id(0), survivor_id);
+        assert!(closed_terminal_ids
+            .iter()
+            .all(|terminal_id| !app.state.terminals.contains_key(terminal_id)));
+        assert!(closed_pane_ids
+            .iter()
+            .all(|pane_id| !app.state.plugin_panes.contains_key(pane_id)));
+        assert!(app.state.session_dirty);
+        let events = app.event_hub.events_after(0);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0].1.data,
+            crate::api::schema::EventData::WorkspaceClosed {
+                workspace_id,
+                workspace: Some(snapshot),
+            } if workspace_id == &closed_workspace_id && snapshot == &closed_workspace
+        ));
+        assert_eq!(
+            events[0].1.event,
+            crate::api::schema::EventKind::WorkspaceClosed
+        );
+    }
+
+    #[test]
+    fn api_tab_close_invalid_id_has_no_close_side_effects() {
+        let mut app = app_with_workspace();
+        app.state.ensure_test_terminals();
+        app.state.session_dirty = false;
+        let workspace_ids = app
+            .state
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.id.clone())
+            .collect::<Vec<_>>();
+        let terminal_ids = app.state.terminal_ids_for_workspace(0);
+        let active_workspace = app.state.active;
+        let selected_workspace = app.state.selected;
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::TabClose(TabTarget {
+                tab_id: "missing-tab".into(),
+            }),
+        });
+
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "tab_not_found");
+        assert_eq!(app.state.active, active_workspace);
+        assert_eq!(app.state.selected, selected_workspace);
+        assert_eq!(
+            app.state
+                .workspaces
+                .iter()
+                .map(|workspace| workspace.id.clone())
+                .collect::<Vec<_>>(),
+            workspace_ids
+        );
+        assert!(terminal_ids
+            .iter()
+            .all(|terminal_id| app.state.terminals.contains_key(terminal_id)));
+        assert!(!app.state.session_dirty);
+        assert!(app.event_hub.events_after(0).is_empty());
+    }
+
+    #[test]
+    fn api_tab_close_requires_explicit_group_for_parent_worktree_space() {
+        let mut app = app_with_workspace();
+        app.state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
+            key: "repo-key".into(),
+            label: "herdr".into(),
+            repo_root: "/repo/herdr".into(),
+            checkout_path: "/repo/herdr".into(),
+            is_linked_worktree: false,
+        });
+        let mut linked = Workspace::test_new("linked");
+        linked.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
+            key: "repo-key".into(),
+            label: "herdr".into(),
+            repo_root: "/repo/herdr".into(),
+            checkout_path: "/repo/herdr-linked".into(),
+            is_linked_worktree: true,
+        });
+        app.state.workspaces.push(linked);
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.session_dirty = false;
+        let workspace_ids = app
+            .state
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.id.clone())
+            .collect::<Vec<_>>();
+        let terminal_ids = app.state.terminal_ids_for_workspace(0);
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        app.state.plugin_panes.insert(
+            pane_id,
+            crate::app::state::PluginPaneRecord {
+                plugin_id: "example.pane".into(),
+                entrypoint: "board".into(),
+            },
+        );
         let tab_id = app.public_tab_id(0, 0).unwrap();
 
-        let response = app.handle_tab_close("req".into(), TabTarget { tab_id });
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::TabClose(TabTarget { tab_id }),
+        });
 
-        assert_multi_tab_unsupported(&response);
-        assert_eq!(app.state.workspaces.len(), 1);
-        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "workspace_group_close_required");
+        assert_eq!(
+            app.state
+                .workspaces
+                .iter()
+                .map(|workspace| workspace.id.clone())
+                .collect::<Vec<_>>(),
+            workspace_ids
+        );
+        assert!(terminal_ids
+            .iter()
+            .all(|terminal_id| app.state.terminals.contains_key(terminal_id)));
+        assert!(app.state.plugin_panes.contains_key(&pane_id));
+        assert_eq!(app.state.active, Some(0));
+        assert_eq!(app.state.selected, 0);
         assert!(!app.state.session_dirty);
         assert!(app.event_hub.events_after(0).is_empty());
     }

@@ -2001,7 +2001,7 @@ async fn deferred_worktree_response_moves_only_its_source_client() {
 }
 
 #[tokio::test]
-async fn client_local_navigation_does_not_emit_global_focus_transitions() {
+async fn client_tab_focus_uses_space_focus_and_keeps_its_remembered_tab() {
     let mut server = test_headless_server();
     let mut workspace = crate::workspace::Workspace::test_new("independent-focus");
     let first_pane = workspace.tabs[0].root_pane;
@@ -2029,6 +2029,7 @@ async fn client_local_navigation_does_not_emit_global_focus_transitions() {
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
     server.app.state.mode = crate::app::Mode::Terminal;
+    let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
 
     let (first_control, _) = connect_matching_test_shell(&mut server, 61);
@@ -2039,19 +2040,39 @@ async fn client_local_navigation_does_not_emit_global_focus_transitions() {
     server.clients.get_mut(&61).unwrap().outer_terminal_focus = Some(true);
     server.clients.get_mut(&62).unwrap().outer_terminal_focus = Some(true);
 
-    let (respond_to, _response_rx) = std::sync::mpsc::channel();
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
     server.handle_client_shell_api_request(
         62,
         crate::api::ApiRequestMessage {
             request: crate::api::schema::Request {
-                id: "focus-own-tab".into(),
+                id: "focus-own-space".into(),
                 method: crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
-                    tab_id: second_tab_id,
+                    tab_id: first_tab_id.clone(),
                 }),
             },
             respond_to,
             response_write_complete: None,
         },
+    );
+    let response: crate::api::schema::SuccessResponse =
+        serde_json::from_str(&response_rx.recv().unwrap()).unwrap();
+    let crate::api::schema::ResponseResult::TabInfo { tab } = response.result else {
+        panic!("expected TabInfo for the client's active tab");
+    };
+    assert_eq!(tab.tab_id, second_tab_id);
+    assert!(tab.focused);
+    assert_eq!(server.app.state.active, Some(0));
+    assert_eq!(
+        server.app.state.workspaces[0].active_tab_index(),
+        second_tab
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(62).as_deref(),
+        Some(second_tab_id.as_str())
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(61).as_deref(),
+        Some(first_tab_id.as_str())
     );
     server.app.sync_focus_events();
     assert!(first_input.try_recv().is_err());
@@ -2702,6 +2723,561 @@ async fn public_workspace_focus_preserves_each_clients_remembered_tabs() {
         first_tab_id
     );
     shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn client_tab_close_reconciles_clients_after_closing_the_target_space() {
+    let mut server = test_headless_server();
+    let first = crate::workspace::Workspace::test_new("survivor");
+    let second = crate::workspace::Workspace::test_new("closing");
+    server.app.state.workspaces = vec![first, second];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let survivor_workspace_id = server.app.public_workspace_id(0);
+    let closing_workspace_id = server.app.public_workspace_id(1);
+    let survivor_tab_id = server.app.public_tab_id(0, 0).unwrap();
+    let closing_tab_id = server.app.public_tab_id(1, 0).unwrap();
+
+    let (first_control, _) = connect_test_shell(&mut server, 43, 100, 30);
+    let (second_control, _) = connect_test_shell(&mut server, 44, 80, 24);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    assert!(server.focus_shell_client_on_tab(44, &closing_tab_id));
+
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    server.handle_client_shell_api_request(
+        43,
+        crate::api::ApiRequestMessage {
+            request: crate::api::schema::Request {
+                id: "close-other-client-space".into(),
+                method: crate::api::schema::Method::TabClose(crate::api::schema::TabTarget {
+                    tab_id: closing_tab_id,
+                }),
+            },
+            respond_to,
+            response_write_complete: None,
+        },
+    );
+
+    let response: crate::api::schema::SuccessResponse =
+        serde_json::from_str(&response_rx.recv().unwrap()).unwrap();
+    assert_eq!(response.result, crate::api::schema::ResponseResult::Ok {});
+    assert_eq!(server.app.state.workspaces.len(), 1);
+    assert_eq!(server.app.public_workspace_id(0), survivor_workspace_id);
+    assert_eq!(
+        server.shell_tab_id_for_client(43).as_deref(),
+        Some(survivor_tab_id.as_str())
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(44).as_deref(),
+        Some(survivor_tab_id.as_str())
+    );
+    for client_id in [43, 44] {
+        let location = server.clients[&client_id].shell_location.as_ref().unwrap();
+        assert_eq!(
+            location.focused_workspace_id.as_deref(),
+            Some(survivor_workspace_id.as_str())
+        );
+        assert!(!location.active_tab_ids.contains_key(&closing_workspace_id));
+    }
+
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn client_tab_close_uses_requesting_space_as_close_fallback_context() {
+    let mut server = test_headless_server();
+    let (default, _) = test_shell_workspace("close-global-default", b"DEFAULT");
+    let (closing, _) = test_shell_workspace("close-requesting-space", b"CLOSING");
+    let (following, _) = test_shell_workspace("close-following-space", b"FOLLOWING");
+    server.app.state.workspaces = vec![default, closing, following];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let closing_tab_id = server.app.public_tab_id(1, 0).unwrap();
+    let following_workspace_id = server.app.public_workspace_id(2);
+    let following_tab_id = server.app.public_tab_id(2, 0).unwrap();
+    let _connection = connect_test_shell(&mut server, 113, 80, 24);
+    assert!(server.focus_shell_client_on_tab(113, &closing_tab_id));
+
+    let response = client_shell_api_response(
+        &mut server,
+        113,
+        crate::api::schema::Method::TabClose(crate::api::schema::TabTarget {
+            tab_id: closing_tab_id,
+        }),
+    );
+    let response: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+    assert_eq!(response.result, crate::api::schema::ResponseResult::Ok {});
+    assert_eq!(server.app.state.workspaces.len(), 2);
+    assert_eq!(server.app.state.active, Some(1));
+    assert_eq!(server.app.state.selected, 1);
+    assert_eq!(server.app.public_workspace_id(1), following_workspace_id);
+    assert_eq!(
+        server.shell_tab_id_for_client(113).as_deref(),
+        Some(following_tab_id.as_str())
+    );
+
+    shutdown_test_runtimes(&mut server);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ShellRequestSideEffectSnapshot {
+    active_workspace: Option<usize>,
+    selected_workspace: usize,
+    active_tabs: Vec<usize>,
+    session_dirty: bool,
+    shell_locations:
+        std::collections::BTreeMap<u64, (Option<usize>, std::collections::BTreeMap<usize, usize>)>,
+    geometry_controllers: std::collections::BTreeMap<(usize, usize), u64>,
+    terminal_sizes: Vec<(u16, u16)>,
+    focus_events: Vec<crate::api::schema::EventKind>,
+}
+
+fn shell_request_side_effect_snapshot(
+    server: &HeadlessServer,
+    event_hub: &api::EventHub,
+    observed_workspace_count: usize,
+) -> ShellRequestSideEffectSnapshot {
+    let shell_locations = server
+        .clients
+        .iter()
+        .filter_map(|(&client_id, client)| {
+            let location = client.shell_location.as_ref()?;
+            let focused_workspace = location
+                .focused_workspace_id
+                .as_deref()
+                .and_then(|workspace_id| server.app.parse_workspace_id(workspace_id));
+            let active_tabs = location
+                .active_tab_ids
+                .iter()
+                .filter_map(|(workspace_id, tab_id)| {
+                    Some((
+                        server.app.parse_workspace_id(workspace_id)?,
+                        server.app.parse_tab_id(tab_id)?.1,
+                    ))
+                })
+                .collect();
+            Some((client_id, (focused_workspace, active_tabs)))
+        })
+        .collect();
+    let geometry_controllers = server
+        .tab_geometry_controllers
+        .iter()
+        .filter_map(|(tab_id, &client_id)| Some((server.app.parse_tab_id(tab_id)?, client_id)))
+        .collect();
+    let terminal_sizes = server
+        .app
+        .state
+        .workspaces
+        .iter()
+        .take(observed_workspace_count)
+        .flat_map(|workspace| {
+            workspace.tabs.iter().flat_map(|tab| {
+                tab.panes
+                    .keys()
+                    .filter_map(|pane_id| workspace.test_runtimes.get(pane_id))
+                    .map(crate::terminal::TerminalRuntime::current_size)
+            })
+        })
+        .collect();
+    let focus_events = event_hub
+        .events_after(0)
+        .into_iter()
+        .map(|(_, event)| event.event)
+        .filter(|kind| {
+            matches!(
+                kind,
+                api::schema::EventKind::WorkspaceFocused
+                    | api::schema::EventKind::TabFocused
+                    | api::schema::EventKind::PaneFocused
+            )
+        })
+        .collect();
+
+    ShellRequestSideEffectSnapshot {
+        active_workspace: server.app.state.active,
+        selected_workspace: server.app.state.selected,
+        active_tabs: server
+            .app
+            .state
+            .workspaces
+            .iter()
+            .map(crate::workspace::Workspace::active_tab_index)
+            .collect(),
+        session_dirty: server.app.state.session_dirty,
+        shell_locations,
+        geometry_controllers,
+        terminal_sizes,
+        focus_events,
+    }
+}
+
+fn test_shell_workspace(
+    name: &str,
+    screen: &[u8],
+) -> (crate::workspace::Workspace, crate::layout::PaneId) {
+    let mut workspace = crate::workspace::Workspace::test_new(name);
+    let pane_id = workspace.tabs[0].root_pane;
+    workspace.insert_test_runtime(
+        pane_id,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, screen),
+    );
+    (workspace, pane_id)
+}
+
+fn client_shell_api_response(
+    server: &mut HeadlessServer,
+    client_id: u64,
+    method: crate::api::schema::Method,
+) -> String {
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    server.handle_client_shell_api_request(
+        client_id,
+        crate::api::ApiRequestMessage {
+            request: crate::api::schema::Request {
+                id: "shell-request".into(),
+                method,
+            },
+            respond_to,
+            response_write_complete: None,
+        },
+    );
+    response_rx.recv().expect("client shell API response")
+}
+
+struct ClientTabFocusRejectionFixture {
+    server: HeadlessServer,
+    event_hub: api::EventHub,
+    target_tab_id: String,
+    _connections: Vec<(
+        std::sync::mpsc::Receiver<Vec<u8>>,
+        std::sync::mpsc::Receiver<Vec<u8>>,
+    )>,
+}
+
+fn client_tab_focus_rejection_fixture() -> ClientTabFocusRejectionFixture {
+    let event_hub = api::EventHub::default();
+    let mut server = test_headless_server_with_event_hub(event_hub.clone());
+    let (first, _first_pane) = test_shell_workspace("focus-default", b"DEFAULT");
+    let (second, _second_pane) = test_shell_workspace("focus-client", b"CLIENT");
+    let (third, third_pane) = test_shell_workspace("focus-target", b"TARGET");
+    server.app.state.workspaces = vec![first, second, third];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.session_dirty = false;
+    let target_tab_id = server.app.public_tab_id(2, 0).expect("target tab id");
+
+    let first_connection = connect_test_shell(&mut server, 101, 70, 20);
+    let second_connection = connect_test_shell(&mut server, 102, 110, 35);
+    let client_tab_id = server.app.public_tab_id(1, 0).expect("client tab id");
+    assert!(server.focus_shell_client_on_tab(101, &client_tab_id));
+    assert!(server.focus_shell_client_on_tab(102, &target_tab_id));
+    assert!(server.claim_shell_tab_geometry(102, false));
+    server.app.state.session_dirty = false;
+    server.clients.get_mut(&101).unwrap().outer_terminal_focus = Some(true);
+    server.clients.get_mut(&102).unwrap().outer_terminal_focus = Some(true);
+
+    assert_eq!(
+        server.tab_geometry_controllers.get(&target_tab_id),
+        Some(&102)
+    );
+    assert_ne!(
+        server.app.state.workspaces[2].test_runtimes[&third_pane].current_size(),
+        (80, 24)
+    );
+    ClientTabFocusRejectionFixture {
+        server,
+        event_hub,
+        target_tab_id,
+        _connections: vec![first_connection, second_connection],
+    }
+}
+
+struct TabCloseGuardFixture {
+    server: HeadlessServer,
+    event_hub: api::EventHub,
+    parent_tab_id: String,
+    base_dir: std::path::PathBuf,
+    _connections: Vec<(
+        std::sync::mpsc::Receiver<Vec<u8>>,
+        std::sync::mpsc::Receiver<Vec<u8>>,
+    )>,
+}
+
+fn tab_close_guard_fixture() -> TabCloseGuardFixture {
+    let event_hub = api::EventHub::default();
+    let mut server = test_headless_server_with_event_hub(event_hub.clone());
+    #[cfg(windows)]
+    {
+        server.app.state.default_shell = "cmd.exe".into();
+    }
+    #[cfg(not(windows))]
+    {
+        server.app.state.default_shell = "/bin/sh".into();
+    }
+    server.app.state.shell_mode = crate::config::ShellModeConfig::NonLogin;
+    let (first, _) = test_shell_workspace("close-default", b"DEFAULT");
+    let (second, second_pane) = test_shell_workspace("close-client", b"CLIENT");
+    let (mut parent, _) = test_shell_workspace("close-parent", b"PARENT");
+    let base_dir = std::env::temp_dir().join(format!("herdr-tab-close-{}", parent.id));
+    let repo_root = base_dir.join("repo");
+    let checkout_path = base_dir.join("linked");
+    std::fs::create_dir_all(&repo_root).expect("create test repository directory");
+    std::fs::create_dir_all(&checkout_path).expect("create test worktree directory");
+    parent.identity_cwd = repo_root.clone();
+    let parent_membership = crate::workspace::WorktreeSpaceMembership {
+        key: "queued-close-repo".into(),
+        label: "queued-close-repo".into(),
+        repo_root: repo_root.clone(),
+        checkout_path: repo_root.clone(),
+        is_linked_worktree: false,
+    };
+    parent.worktree_space = Some(parent_membership.clone());
+    let parent_workspace_id = parent.id.clone();
+    server.app.state.workspaces = vec![first, second, parent];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.session_dirty = false;
+    let parent_tab_id = server.app.public_tab_id(2, 0).expect("parent tab id");
+
+    let first_connection = connect_test_shell(&mut server, 111, 70, 20);
+    let second_connection = connect_test_shell(&mut server, 112, 110, 35);
+    let client_tab_id = server.app.public_tab_id(1, 0).expect("client tab id");
+    assert!(server.focus_shell_client_on_tab(111, &client_tab_id));
+    assert!(server.focus_shell_client_on_tab(112, &client_tab_id));
+    assert!(server.claim_shell_tab_geometry(112, false));
+    let default_tab_id = server.app.public_tab_id(0, 0).expect("default tab id");
+    assert!(server.focus_shell_client_on_tab(112, &default_tab_id));
+    server.app.state.session_dirty = false;
+    assert_ne!(
+        server.app.state.workspaces[1].test_runtimes[&second_pane].current_size(),
+        (80, 24)
+    );
+
+    let checkout_key = crate::worktree::canonical_or_original(&checkout_path);
+    let operation_id = 71;
+    server
+        .app
+        .pending_api_worktree_creates
+        .insert(checkout_key.clone(), operation_id);
+    let (respond_to, _response_rx) = std::sync::mpsc::channel();
+    server
+        .app
+        .event_tx
+        .try_send(crate::events::AppEvent::WorktreeAddFinished(Box::new(
+            crate::events::WorktreeAddResult {
+                path: checkout_path,
+                api_request: Some(crate::events::ApiWorktreeAddRequest {
+                    id: "queued-worktree-create".into(),
+                    operation_id,
+                    checkout_key,
+                    source_workspace_id: Some(parent_workspace_id),
+                    source_existing_membership: Some(parent_membership),
+                    source_checkout_path: repo_root.clone(),
+                    source_repo_root: repo_root,
+                    repo_key: "queued-close-repo".into(),
+                    repo_name: "queued-close-repo".into(),
+                    label: None,
+                    focus: false,
+                    respond_to,
+                }),
+                result: Ok(()),
+            },
+        )))
+        .expect("queue worktree completion");
+
+    TabCloseGuardFixture {
+        server,
+        event_hub,
+        parent_tab_id,
+        base_dir,
+        _connections: vec![first_connection, second_connection],
+    }
+}
+
+#[tokio::test]
+async fn client_invalid_tab_focus_preserves_workspace_and_shell_geometry() {
+    let mut fixture = client_tab_focus_rejection_fixture();
+    fixture.server.drain_all_internal_events_with_forwarding();
+    let before = shell_request_side_effect_snapshot(&fixture.server, &fixture.event_hub, 3);
+
+    let response = client_shell_api_response(
+        &mut fixture.server,
+        101,
+        crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+            tab_id: "missing-tab".into(),
+        }),
+    );
+    let response: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
+    assert_eq!(response.error.code, "tab_not_found");
+    assert_eq!(
+        shell_request_side_effect_snapshot(&fixture.server, &fixture.event_hub, 3),
+        before
+    );
+
+    shutdown_test_runtimes(&mut fixture.server);
+}
+
+#[tokio::test]
+async fn client_tab_focus_for_queued_terminal_exit_matches_topology_drain_only() {
+    let mut baseline = client_tab_focus_rejection_fixture();
+    let pane_id = baseline.server.app.state.workspaces[2].tabs[0].root_pane;
+    baseline
+        .server
+        .app
+        .event_tx
+        .try_send(crate::events::AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Exited,
+        })
+        .expect("queue target terminal exit");
+    baseline.server.drain_all_internal_events_with_forwarding();
+    assert!(baseline
+        .server
+        .app
+        .parse_tab_id(&baseline.target_tab_id)
+        .is_none());
+    let expected = shell_request_side_effect_snapshot(&baseline.server, &baseline.event_hub, 3);
+
+    let mut actual = client_tab_focus_rejection_fixture();
+    let pane_id = actual.server.app.state.workspaces[2].tabs[0].root_pane;
+    actual
+        .server
+        .app
+        .event_tx
+        .try_send(crate::events::AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Exited,
+        })
+        .expect("queue target terminal exit");
+    assert!(actual
+        .server
+        .app
+        .parse_tab_id(&actual.target_tab_id)
+        .is_some());
+    let response = client_shell_api_response(
+        &mut actual.server,
+        101,
+        crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+            tab_id: actual.target_tab_id.clone(),
+        }),
+    );
+    let response: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
+    assert_eq!(response.error.code, "tab_not_found");
+    assert!(actual
+        .server
+        .app
+        .parse_tab_id(&actual.target_tab_id)
+        .is_none());
+    assert_eq!(
+        shell_request_side_effect_snapshot(&actual.server, &actual.event_hub, 3),
+        expected
+    );
+
+    shutdown_test_runtimes(&mut baseline.server);
+    shutdown_test_runtimes(&mut actual.server);
+}
+
+#[tokio::test]
+async fn client_tab_focus_during_shutdown_preserves_shell_and_global_focus() {
+    let mut fixture = client_tab_focus_rejection_fixture();
+    let before = shell_request_side_effect_snapshot(&fixture.server, &fixture.event_hub, 3);
+    fixture.server.shutting_down = true;
+
+    let response = client_shell_api_response(
+        &mut fixture.server,
+        101,
+        crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+            tab_id: fixture.target_tab_id.clone(),
+        }),
+    );
+    let response: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
+    assert_eq!(response.error.code, "server_unavailable");
+    assert_eq!(
+        shell_request_side_effect_snapshot(&fixture.server, &fixture.event_hub, 3),
+        before
+    );
+
+    shutdown_test_runtimes(&mut fixture.server);
+}
+
+#[tokio::test]
+async fn client_tab_close_guard_rejection_matches_topology_drain_only() {
+    let mut baseline = tab_close_guard_fixture();
+    assert!(!baseline
+        .server
+        .app
+        .state
+        .workspace_close_would_close_worktree_group(2));
+    baseline.server.drain_all_internal_events_with_forwarding();
+    assert!(baseline
+        .server
+        .app
+        .state
+        .workspace_close_would_close_worktree_group(2));
+    let expected = shell_request_side_effect_snapshot(&baseline.server, &baseline.event_hub, 3);
+
+    let mut actual = tab_close_guard_fixture();
+    let response = client_shell_api_response(
+        &mut actual.server,
+        111,
+        crate::api::schema::Method::TabClose(crate::api::schema::TabTarget {
+            tab_id: actual.parent_tab_id.clone(),
+        }),
+    );
+    let response: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
+    assert_eq!(response.error.code, "workspace_group_close_required");
+    assert!(actual
+        .server
+        .app
+        .state
+        .workspace_close_would_close_worktree_group(2));
+    assert_eq!(
+        shell_request_side_effect_snapshot(&actual.server, &actual.event_hub, 3),
+        expected
+    );
+
+    shutdown_test_runtimes(&mut baseline.server);
+    shutdown_test_runtimes(&mut actual.server);
+    let _ = std::fs::remove_dir_all(baseline.base_dir);
+    let _ = std::fs::remove_dir_all(actual.base_dir);
+}
+
+#[tokio::test]
+async fn client_invalid_tab_close_matches_topology_drain_only() {
+    let mut baseline = tab_close_guard_fixture();
+    baseline.server.drain_all_internal_events_with_forwarding();
+    let expected = shell_request_side_effect_snapshot(&baseline.server, &baseline.event_hub, 3);
+
+    let mut actual = tab_close_guard_fixture();
+    let response = client_shell_api_response(
+        &mut actual.server,
+        111,
+        crate::api::schema::Method::TabClose(crate::api::schema::TabTarget {
+            tab_id: "missing-tab".into(),
+        }),
+    );
+    let response: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
+    assert_eq!(response.error.code, "tab_not_found");
+    assert!(actual
+        .server
+        .app
+        .state
+        .workspace_close_would_close_worktree_group(2));
+    assert_eq!(
+        shell_request_side_effect_snapshot(&actual.server, &actual.event_hub, 3),
+        expected
+    );
+
+    shutdown_test_runtimes(&mut baseline.server);
+    shutdown_test_runtimes(&mut actual.server);
+    let _ = std::fs::remove_dir_all(baseline.base_dir);
+    let _ = std::fs::remove_dir_all(actual.base_dir);
 }
 
 #[tokio::test]

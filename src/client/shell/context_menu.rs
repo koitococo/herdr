@@ -124,17 +124,15 @@ impl ClientShellState {
     }
 
     pub(super) fn open_tab_context_menu(&mut self, tab_id: String, x: u16, y: u16) {
-        let Some(tab) = self
-            .snapshot
-            .as_deref()
-            .and_then(|snapshot| snapshot.tabs.iter().find(|tab| tab.tab_id == tab_id))
-        else {
+        let endpoint_id = self.active_endpoint_id.clone();
+        let Some(workspace_id) = self.endpoint_tab_workspace_id(&endpoint_id, &tab_id) else {
             return;
         };
         self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
             target: ClientContextMenuTarget::Tab {
+                endpoint_id,
                 tab_id,
-                workspace_id: tab.workspace_id.clone(),
+                workspace_id,
             },
             x,
             y,
@@ -198,9 +196,12 @@ impl ClientShellState {
                 ..
             } => self.activate_workspace_context_action(workspace_id, close_group, action, outcome),
             ClientContextMenuTarget::Tab {
+                endpoint_id,
                 tab_id,
                 workspace_id,
-            } => self.activate_tab_context_action(tab_id, workspace_id, action, outcome),
+            } => {
+                self.activate_tab_context_action(endpoint_id, tab_id, workspace_id, action, outcome)
+            }
             ClientContextMenuTarget::Pane {
                 pane_id,
                 workspace_id,
@@ -281,16 +282,25 @@ impl ClientShellState {
 
     fn activate_tab_context_action(
         &mut self,
+        endpoint_id: ClientEndpointId,
         tab_id: String,
         workspace_id: String,
         action: ClientContextMenuAction,
         outcome: &mut ClientShellInput,
     ) {
-        use crate::api::schema::{Method, TabTarget};
+        if self.active_endpoint_id != endpoint_id
+            || self
+                .endpoint_tab_workspace_id(&endpoint_id, &tab_id)
+                .as_deref()
+                != Some(workspace_id.as_str())
+        {
+            return;
+        }
+        use crate::api::schema::{Method, WorkspaceTarget};
 
         self.push_endpoint_method(
-            Method::TabFocus(TabTarget {
-                tab_id: tab_id.clone(),
+            Method::WorkspaceFocus(WorkspaceTarget {
+                workspace_id: workspace_id.clone(),
             }),
             outcome,
         );

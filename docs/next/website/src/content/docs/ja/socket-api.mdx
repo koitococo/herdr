@@ -107,13 +107,21 @@ herdr pane read w1:p2 --source recent --lines 50
 | インテグレーション | `integration.install`、`integration.uninstall` |
 | プラグイン | `plugin.link`、`plugin.list`、`plugin.unlink`、`plugin.enable`、`plugin.disable`、`plugin.action.list`、`plugin.action.invoke`、`plugin.log.list`、`plugin.pane.open`、`plugin.pane.focus`、`plugin.pane.close` |
 
-タブレコード、`tab_id` フィールド、`HERDR_TAB_ID` は引き続きプロトコルとランタイムの一部です。`tab.list` と `tab.get` は、従来の複数タブスナップショットから復元されたものも含め、引き続き使用できます。
+タブレコード、`tab_id` フィールド、`HERDR_TAB_ID` は引き続きプロトコルとランタイムの一部です。`tab.list` と `tab.get` は、従来の複数タブスナップショットから復元されたものも含め、引き続き使用できます。旧来の複数タブ状態は、全体を必ず1タブにする制約を意味しません。デスクトップ UI では非アクティブな隠れたタブを表示しません。
 
 互換性のため、`tab.create` は指定した `workspace_id` の中にタブを追加するのではなく、最初のタブとルートペインを持つ独立したワークスペース（Space）を作成します。`workspace_id` は元のワークスペースを指定し、`cwd` を指定しても有効な既存ワークスペースでなければなりません。省略時はアクティブなワークスペースを使用し、アクティブなものがない場合は `workspace_not_found` を返します。
 
 明示的な `cwd` は新しいターミナルの作業ディレクトリに優先されます。省略時は、元のワークスペースのフォーカス中ペインと既存の `terminal.new_cwd` ポリシーが決定します。`env` は通常の新規ターミナル環境ルールを使用し、`label` は新しいワークスペースと最初のタブの両方に設定されます。`focus` のデフォルトは `false` で、現在アクティブなワークスペースを維持します。`true` にすると新しいワークスペースをアクティブにします。
 
-`TabCreated` のペイロードは引き続き `{tab, root_pane}` で、`tab.workspace_id` が新しい Space を示します。`tab.create` は新しいワークスペースについて `workspace.created`、`tab.created`、`pane.created`、`layout.updated` を発行します。返されたタブが元のワークスペースに属すると仮定しないでください。`tab.focus` はすでにアクティブなタブに対してのみ no-op で成功し、別のタブへの要求は `multi_tab_unsupported` を返します。`tab.move`、`tab.close`、`tab.rename` も同じエラーを返します。プロトコルやスナップショット形式の移行ではなく、タブ UI も追加しません。
+`TabCreated` のペイロードは引き続き `{tab, root_pane}` で、`tab.workspace_id` が新しい Space を示します。`tab.create` は新しいワークスペースについて `workspace.created`、`tab.created`、`pane.created`、`layout.updated` を発行します。返されたタブが元のワークスペースに属すると仮定しないでください。
+
+`tab.focus` は `tab_id` を検証したあと、タブが属するワークスペースにフォーカスします。従来の複数タブワークスペースで指定タブを選択するものではありません。`TabInfo` は実際にアクティブなタブを表します。client-shell endpoint では、そのクライアントが保持するタブビューを返します。不明な ID は `tab_not_found` を返し、サーバーのフォーカス、クライアントの位置、geometry を変更しません。
+
+`tab.close` は `tab_id` を検証し、通常の非グループクローズとして所属ワークスペース全体を閉じます。対象タブだけでなく、その Space の全タブ、ペイン、PTY、プラグインレコードが閉じられます。成功時は `Ok` を返して `workspace.closed`（`WorkspaceClosed`）を発行し、`tab.closed` は発行しません。リンクされた worktree が開いている親ワークスペースは `workspace_group_close_required` で保護されます。グループを閉じるのは、`workspace.close` に `close_group: true` を明示した場合（CLI: `herdr workspace close <workspace_id> --group`）だけです。
+
+`ui.confirm_close` が制御するのは TUI のキーバインド/メニューの確認だけです。raw socket の `tab.close` リクエストは即時に実行され、確認を求めません。
+
+`tab.rename` と `tab.move` は引き続きサポートされません。プロトコルやスナップショット形式の移行ではなく、タブ UI も追加しません。
 
 `agent.wait` はサーバー所有でイベント駆動です。解決したペイン占有者に固定されるため、置換されたエージェントが待機を満たすことはありません。`agent.prompt` は `until` と `timeout_ms` を持つ省略可能な `wait` オブジェクトを受け付けます。これにより、プロンプト送信と待機開始を 1 つのリクエストで行い、別々の呼び出し間の競合を避けられます。解決したエージェントがすでに `blocked` の場合、`agent.prompt` は入力を送信せず、待機も開始せずに `agent_blocked` を返します。
 

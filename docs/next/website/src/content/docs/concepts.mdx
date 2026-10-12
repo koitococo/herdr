@@ -17,11 +17,17 @@ remains available for compatibility, but creates a separate workspace with its
 initial tab and root pane instead of adding a tab to the source workspace. Its
 `workspace_id` selects the source; callers must not assume the returned tab
 belongs to that workspace. `tab.list` and `tab.get` can inspect tab records,
-including those restored from legacy multi-tab snapshots. Other tab mutations
-remain restricted: `tab.focus` is a no-op only for the already-active tab, and
-other focus requests plus `tab.rename`, `tab.move`, and `tab.close` return
-`multi_tab_unsupported`. The protocol and snapshot format are not migrated, and
-`tab.create` does not restore tab UI.
+including records restored from legacy multi-tab snapshots. Legacy snapshots
+remain valid: this is not a global one-tab invariant, and the desktop does not
+expose their hidden tabs. `tab.focus` focuses the owning workspace, not a
+requested hidden tab, and returns `TabInfo` for the actual active tab (a
+client-shell endpoint reports that client's retained tab). `tab.close` closes
+the entire owning Space—all tabs, panes, PTYs, and plugin records—and returns
+`Ok` while emitting `workspace.closed` (`WorkspaceClosed`), not `tab.closed`.
+If a linked-worktree group guard returns `workspace_group_close_required`, use
+`herdr workspace close <workspace_id> --group` to close the group explicitly.
+`tab.rename` and `tab.move` remain unsupported. The protocol and snapshot
+format are unchanged, and `tab.create` does not restore tab UI.
 
 ## Pane
 
