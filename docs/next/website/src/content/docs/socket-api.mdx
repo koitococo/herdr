@@ -38,7 +38,7 @@ events, and subscription events.
 The socket API can:
 
 - create, list, focus, rename, and close workspaces
-- list and inspect tab identities
+- create a separate Space through the compatibility `tab.create` method, and list and inspect tab identities
 - list, inspect, split, swap, focus, resize, rename, read, close, and send input to panes
 - list, inspect, read, prompt, wait on, rename, focus, start, and attach agents through CLI helpers
 - report custom agent state from hooks and plugins
@@ -111,7 +111,13 @@ Raw socket method names use dot notation:
 | Events | `events.subscribe`, `events.wait` |
 | Integrations | `integration.install`, `integration.uninstall` |
 | Plugins | `plugin.link`, `plugin.list`, `plugin.unlink`, `plugin.enable`, `plugin.disable`, `plugin.action.list`, `plugin.action.invoke`, `plugin.log.list`, `plugin.pane.open`, `plugin.pane.focus`, `plugin.pane.close` |
-Tab records, `tab_id` fields, and `HERDR_TAB_ID` remain part of the protocol and runtime. `tab.list` and `tab.get` remain available, including for restored legacy multi-tab sessions. The server rejects `tab.create`, `tab.move`, `tab.close`, and `tab.rename` with `multi_tab_unsupported`; `tab.focus` succeeds only for the already active tab and never switches tabs, while a focus request for another tab returns the same error. Every rejected tab mutation uses the message `multi-tab mutations are not supported; use workspaces instead`. This is not a protocol or snapshot migration.
+Tab records, `tab_id` fields, and `HERDR_TAB_ID` remain part of the protocol and runtime. `tab.list` and `tab.get` remain available, including for restored legacy multi-tab sessions.
+
+For compatibility, `tab.create` creates a separate workspace (Space) with its initial tab and root pane; it does not add a tab to its `workspace_id` source. `workspace_id` selects the source workspace and must identify an existing workspace even when `cwd` is supplied. If omitted, the active workspace is used; with no active workspace, the request returns `workspace_not_found`.
+
+An explicit `cwd` overrides the new terminal's working directory; otherwise the source workspace's focused pane and the existing `terminal.new_cwd` policy determine it. `env` uses the normal new-terminal environment rules. `label` names both the new workspace and its initial tab. Focus defaults to false and keeps the current active workspace; `focus: true` activates the new workspace.
+
+The `TabCreated` payload remains `{tab, root_pane}`; `tab.workspace_id` identifies the new Space. `tab.create` emits `workspace.created`, `tab.created`, `pane.created`, and `layout.updated` for the new workspace. Callers must not assume the returned tab belongs to the source workspace. `tab.focus` is a no-op only for the already-active tab; focusing another tab returns `multi_tab_unsupported`. `tab.move`, `tab.close`, and `tab.rename` also return that error. This is not a protocol or snapshot migration, and it does not add tab UI.
 
 `pane.move` rejects `new_tab` and cross-tab destinations with the same error; same-tab moves and `new_workspace` remain available. `layout.apply` only accepts replacement of the unique tab when its `tab_id` is supplied; paths that would create a tab are rejected. Plugin pane placement `tab` is also rejected.
 
@@ -945,7 +951,7 @@ Errors look like this:
 }
 ```
 
-Tab-topology requests fail like this:
+Rejected tab mutations, such as `tab.rename` or a request to focus a non-active tab, fail like this:
 
 ```json
 {

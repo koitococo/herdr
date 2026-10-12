@@ -720,7 +720,7 @@ fn workspace_list_and_create_round_trip() {
 
 #[cfg(not(target_os = "macos"))]
 #[test]
-fn tab_read_methods_preserve_single_tab_and_mutations_are_rejected_over_socket() {
+fn tab_read_methods_and_tab_create_redirect_over_socket() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -769,14 +769,30 @@ fn tab_read_methods_preserve_single_tab_and_mutations_are_rejected_over_socket()
     );
     assert_eq!(tab_get["result"]["tab"]["tab_id"], first_tab_id);
 
-    let rejected_create = send_request(
+    let created_tab = send_request(
         &socket_path,
         &format!(
             r#"{{"id":"req_t4","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
             workspace_id
         ),
     );
-    assert_eq!(rejected_create["error"]["code"], "multi_tab_unsupported");
+    assert_eq!(created_tab["result"]["type"], "tab_created");
+    let new_workspace_id = created_tab["result"]["tab"]["workspace_id"]
+        .as_str()
+        .unwrap();
+    let new_tab_id = created_tab["result"]["tab"]["tab_id"].as_str().unwrap();
+    assert_ne!(new_workspace_id, workspace_id);
+    assert_ne!(new_tab_id, first_tab_id);
+    assert_eq!(new_tab_id, format!("{new_workspace_id}:t1"));
+    assert_eq!(
+        created_tab["result"]["root_pane"]["workspace_id"],
+        new_workspace_id
+    );
+    assert_eq!(created_tab["result"]["root_pane"]["tab_id"], new_tab_id);
+    assert_eq!(
+        created_tab["result"]["root_pane"]["pane_id"],
+        format!("{new_workspace_id}:p1")
+    );
 
     let rejected_rename = send_request(
         &socket_path,
@@ -812,7 +828,11 @@ fn tab_read_methods_preserve_single_tab_and_mutations_are_rejected_over_socket()
             workspace_id
         ),
     );
-    assert_eq!(tab_list_after["result"]["tabs"], tabs_before);
+
+    let original_tabs_after = tab_list_after["result"]["tabs"].as_array().unwrap();
+    assert_eq!(original_tabs_after.len(), 1);
+    assert_eq!(original_tabs_after[0]["tab_id"], first_tab_id);
+    assert_eq!(original_tabs_after[0]["focused"], false);
 
     cleanup_spawned_herdr(child, base);
 }
@@ -1347,7 +1367,7 @@ fn agent_methods_round_trip_over_socket() {
 }
 
 #[test]
-fn tab_create_without_focus_is_rejected_without_changing_active_tab() {
+fn tab_create_without_focus_creates_background_workspace() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -1373,23 +1393,27 @@ fn tab_create_without_focus_is_rejected_without_changing_active_tab() {
         .unwrap()
         .to_string();
 
-    let tabs_before = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_nf_2","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
-            workspace_id
-        ),
-    )["result"]["tabs"]
-        .clone();
-
-    let rejected_create = send_request(
+    let created_tab = send_request(
         &socket_path,
         &format!(
             r#"{{"id":"req_nf_3","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
             workspace_id
         ),
     );
-    assert_eq!(rejected_create["error"]["code"], "multi_tab_unsupported");
+    assert_eq!(created_tab["result"]["type"], "tab_created");
+    let new_workspace_id = created_tab["result"]["tab"]["workspace_id"]
+        .as_str()
+        .unwrap();
+    let new_tab_id = created_tab["result"]["tab"]["tab_id"].as_str().unwrap();
+    assert_ne!(new_workspace_id, workspace_id);
+    assert_ne!(new_tab_id, first_tab_id);
+    assert_eq!(new_tab_id, format!("{new_workspace_id}:t1"));
+    assert_eq!(created_tab["result"]["tab"]["focused"], false);
+    assert_eq!(
+        created_tab["result"]["root_pane"]["workspace_id"],
+        new_workspace_id
+    );
+    assert_eq!(created_tab["result"]["root_pane"]["tab_id"], new_tab_id);
 
     let tabs_after = send_request(
         &socket_path,
@@ -1398,16 +1422,28 @@ fn tab_create_without_focus_is_rejected_without_changing_active_tab() {
             workspace_id
         ),
     );
-    assert_eq!(tabs_after["result"]["tabs"], tabs_before);
+    assert_eq!(tabs_after["result"]["tabs"].as_array().unwrap().len(), 1);
     assert_eq!(tabs_after["result"]["tabs"][0]["tab_id"], first_tab_id);
     assert_eq!(tabs_after["result"]["tabs"][0]["focused"], true);
+    let new_space_tabs = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"req_nf_5","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
+            new_workspace_id
+        ),
+    );
+    assert_eq!(
+        new_space_tabs["result"]["tabs"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(new_space_tabs["result"]["tabs"][0]["focused"], false);
 
     cleanup_spawned_herdr(child, base);
 }
 
 #[cfg(not(target_os = "macos"))]
 #[test]
-fn events_subscribe_streams_workspace_and_agent_events_without_rejected_tab_events() {
+fn events_subscribe_streams_tab_create_lifecycle_and_agent_events() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -1517,14 +1553,40 @@ fn events_subscribe_streams_workspace_and_agent_events_without_rejected_tab_even
     assert_eq!(agent_detected["data"]["pane_id"], pane_id);
     assert_eq!(agent_detected["data"]["agent"], "pi");
 
-    let rejected_create = send_request(
+    let created_tab = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_l4","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+            r#"{{"id":"req_l4","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
             workspace_id
         ),
     );
-    assert_eq!(rejected_create["error"]["code"], "multi_tab_unsupported");
+    assert_eq!(created_tab["result"]["type"], "tab_created");
+    let created_workspace_id = created_tab["result"]["tab"]["workspace_id"]
+        .as_str()
+        .unwrap();
+    let created_tab_id = created_tab["result"]["tab"]["tab_id"].as_str().unwrap();
+    let created_pane_id = created_tab["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap();
+    assert_ne!(created_workspace_id, workspace_id);
+    let created_events = wait_for_events(
+        &mut reader,
+        &["workspace_created", "tab_created", "pane_created"],
+        Duration::from_secs(2),
+    );
+    assert_eq!(created_events.len(), 3);
+    assert_eq!(
+        event_by_kind(&created_events, "workspace_created")["data"]["workspace"]["workspace_id"],
+        created_workspace_id
+    );
+    assert_eq!(
+        event_by_kind(&created_events, "tab_created")["data"]["tab"]["tab_id"],
+        created_tab_id
+    );
+    assert_eq!(
+        event_by_kind(&created_events, "pane_created")["data"]["pane"]["pane_id"],
+        created_pane_id
+    );
 
     let rejected_rename = send_request(
         &socket_path,
@@ -1534,12 +1596,17 @@ fn events_subscribe_streams_workspace_and_agent_events_without_rejected_tab_even
         ),
     );
     assert_eq!(rejected_rename["error"]["code"], "multi_tab_unsupported");
-    assert!(
-        reader
-            .try_read_json_line(Duration::from_millis(500))
-            .is_none(),
-        "rejected tab mutations emitted an event"
-    );
+    let event_deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < event_deadline {
+        let remaining = event_deadline.saturating_duration_since(Instant::now());
+        let Some(event) = reader.try_read_json_line(remaining) else {
+            break;
+        };
+        assert_ne!(
+            event["event"], "tab_renamed",
+            "rejected tab rename emitted a tab_renamed event"
+        );
+    }
 
     cleanup_spawned_herdr(child, base);
 }

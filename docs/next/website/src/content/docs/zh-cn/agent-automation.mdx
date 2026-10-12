@@ -15,7 +15,7 @@ Herdr 可以作为编码智能体的自动化层。脚本可以控制智能体,�
 
 无论是否包含智能体,窗格都可以存在。智能体是 Herdr 在窗格中识别出的当前进程。因此,`agent start` 需要一个现有 shell 窗格,绝不会创建、拆分或移动布局。
 
-创建工作区时也会创建第一个标签页和根窗格;创建标签页时会创建它的根窗格。第一个进程应使用返回的窗格 ID,只有布局需要另一个终端时才进行拆分。
+创建工作区时也会创建第一个标签页和根窗格。兼容命令 `tab create` 会创建一个独立工作区，并创建它自己的第一个标签页和根窗格；它不会向来源工作区添加标签页。第一个进程应使用返回的窗格 ID,只有布局需要另一个终端时才进行拆分。
 
 创建命令输出 JSON。请从响应中读取 ID,不要猜测:
 
@@ -27,7 +27,7 @@ split=$(herdr pane split "$pane_id" --direction right --no-focus)
 review_pane=$(printf '%s\n' "$split" | jq -r '.result.pane.pane_id')
 ```
 
-`workspace create` 返回 `.result.workspace`、`.result.tab` 和 `.result.root_pane`;`tab create` 返回 `.result.tab` 和 `.result.root_pane`;`pane split` 把新窗格返回为 `.result.pane`。
+`workspace create` 返回 `.result.workspace`、`.result.tab` 和 `.result.root_pane`;`tab create` 返回 `.result.tab` 和 `.result.root_pane`,可通过 `.result.tab.workspace_id` 获取新工作区 ID;`pane split` 把新窗格返回为 `.result.pane`。
 
 把窗格移动到另一个工作区会改变带工作区前缀的窗格 ID。执行 `pane move` 后,请继续使用 `.result.move_result.pane.pane_id`;旧值保留在 `.result.move_result.previous_pane_id`。运行中的进程会保留启动时的 Herdr 环境,但旧的 `HERDR_PANE_ID` 会继续作为该终端的别名,所以 `--current` 仍可安全使用。移动后发起的新命令仍可通过智能体名称解析,但已经进行中的等待会以 `agent_not_running` 结束。
 

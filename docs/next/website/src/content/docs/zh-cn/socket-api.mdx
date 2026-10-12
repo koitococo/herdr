@@ -34,7 +34,7 @@ herdr api schema --output herdr-api.schema.json
 socket API 可以:
 
 - 创建、列出、聚焦、重命名和关闭工作区
-- 创建、列出、聚焦、重命名和关闭标签页
+- 通过兼容方法 `tab.create` 创建新的 Space，以及列出和检查标签页身份
 - 列出、检查、分割、交换、聚焦、调整、重命名、读取、关闭窗格并向其发送输入
 - 通过 CLI 辅助命令列出、检查、读取、提示、等待、重命名、聚焦、启动和附加智能体
 - 从钩子和插件上报自定义智能体状态
@@ -50,7 +50,7 @@ socket API 可以:
 herdr workspace create --cwd ~/project --label api
 ```
 
-创建标签页:
+通过兼容命令创建新的 Space:
 
 ```bash
 herdr tab create --label logs
@@ -106,6 +106,14 @@ herdr pane read w1:p2 --source recent --lines 50
 | 事件 | `events.subscribe`、`events.wait` |
 | 集成 | `integration.install`、`integration.uninstall` |
 | 插件 | `plugin.link`、`plugin.list`、`plugin.unlink`、`plugin.enable`、`plugin.disable`、`plugin.action.list`、`plugin.action.invoke`、`plugin.log.list`、`plugin.pane.open`、`plugin.pane.focus`、`plugin.pane.close` |
+
+标签页记录、`tab_id` 字段和 `HERDR_TAB_ID` 仍属于协议和运行时。`tab.list` 和 `tab.get` 仍可使用，包括读取从旧版多标签快照恢复的记录。
+
+为保持兼容，`tab.create` 会创建一个带有初始标签页和根窗格的独立工作区（Space），而不是向 `workspace_id` 指定的来源工作区添加标签页。`workspace_id` 选择来源工作区；即使提供 `cwd`，它也必须是有效的现有工作区。省略时使用活动工作区；没有活动工作区则返回 `workspace_not_found`。
+
+显式 `cwd` 优先决定新终端的工作目录；否则由来源工作区的焦点窗格和现有 `terminal.new_cwd` 策略决定。`env` 遵循普通新终端环境规则；`label` 同时设置新工作区和初始标签页的名称。`focus` 默认为 `false`，保留当前活动工作区；设为 `true` 时激活新工作区。
+
+`TabCreated` 载荷仍为 `{tab, root_pane}`；`tab.workspace_id` 标识新 Space。`tab.create` 会为新工作区发出 `workspace.created`、`tab.created`、`pane.created` 和 `layout.updated`。调用方不能假定返回的标签页属于来源工作区。`tab.focus` 仅在目标已经是活动标签页时作为 no-op 成功；请求聚焦其他标签页会返回 `multi_tab_unsupported`。`tab.move`、`tab.close` 和 `tab.rename` 也会返回同一错误。协议和快照格式未迁移，此更改也不会添加标签页 UI。
 
 `agent.wait` 由服务器拥有并由事件驱动。它会固定到已解析的窗格占用者,因此替换后的智能体不能满足该等待。`agent.prompt` 接受可选的 `wait` 对象,其中包含 `until` 和 `timeout_ms`;这样可在一个请求中提交提示并开始等待,避免两个独立调用之间的竞态。如果解析出的智能体已经是 `blocked`,`agent.prompt` 不会发送输入或开始等待,而是返回 `agent_blocked`。
 

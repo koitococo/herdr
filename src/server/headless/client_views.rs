@@ -319,7 +319,9 @@ impl HeadlessServer {
         )
     }
 
-    fn shell_endpoint_rejects_tab_mutation(method: &api::schema::Method) -> bool {
+    fn shell_endpoint_preserves_client_location_on_tab_mutation(
+        method: &api::schema::Method,
+    ) -> bool {
         use api::schema::Method;
 
         matches!(
@@ -957,12 +959,25 @@ impl HeadlessServer {
         client_id: u64,
         mut msg: api::ApiRequestMessage,
     ) -> bool {
+        let tab_create_focus_requested = matches!(
+            &msg.request.method,
+            api::schema::Method::TabCreate(params) if params.focus
+        );
         let local_tab_focus_target = match &msg.request.method {
             api::schema::Method::TabFocus(target) => Some(target.clone()),
             _ => None,
         };
+        // Resolve an omitted source from this endpoint's location without changing App focus.
+        if let api::schema::Method::TabCreate(params) = &mut msg.request.method {
+            if params.workspace_id.is_none() {
+                if let Some(target) = self.shell_target_for_client(client_id) {
+                    params.workspace_id =
+                        Some(self.app.public_workspace_id(target.workspace_index));
+                }
+            }
+        }
         let preserve_client_shell_location = local_tab_focus_target.is_some()
-            || Self::shell_endpoint_rejects_tab_mutation(&msg.request.method);
+            || Self::shell_endpoint_preserves_client_location_on_tab_mutation(&msg.request.method);
         let focus_before = self.shell_focus_target(client_id);
         let focused_tabs_before = self.focused_shell_tabs();
         let method_claims_geometry = Self::shell_endpoint_claims_geometry(&msg.request.method);
@@ -977,6 +992,12 @@ impl HeadlessServer {
             msg.request.method = api::schema::Method::TabGet(target.clone());
             (original, proxy_rx)
         });
+        // Keep the endpoint location until creation succeeds; failed creates must not navigate it.
+        let tab_create_response = tab_create_focus_requested.then(|| {
+            let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
+            let original = std::mem::replace(&mut msg.respond_to, proxy_tx);
+            (original, proxy_rx)
+        });
         let mut navigation_changed = if preserve_client_shell_location {
             false
         } else {
@@ -988,6 +1009,13 @@ impl HeadlessServer {
         let popup_before = self.app.state.popup_pane.is_some();
         let popup_owner = self.shell_tab_id_for_client(client_id);
         let changed = self.handle_api_request_with_shutdown_check_inner(msg, false, true);
+        let local_tab_create_focus_succeeded =
+            match forward_proxied_api_response(tab_create_response) {
+                Some(api::schema::ResponseResult::TabCreated { tab, .. }) => {
+                    self.focus_shell_client_on_tab(client_id, &tab.tab_id)
+                }
+                _ => false,
+            };
         let local_tab_focus_succeeded =
             forward_client_shell_tab_focus_response(local_tab_focus_response);
         let local_navigation_changed = if local_tab_focus_succeeded {
@@ -998,6 +1026,7 @@ impl HeadlessServer {
             false
         };
         navigation_changed |= local_navigation_changed;
+        navigation_changed |= local_tab_create_focus_succeeded;
         if !preserve_client_shell_location {
             self.focus_shell_client_on_default_target(client_id);
         }
@@ -1034,7 +1063,7 @@ impl HeadlessServer {
                 local_navigation_changed
                     && (self.claim_shell_tab_geometry(client_id, false)
                         || self.resize_shell_tab_if_controller(client_id, false))
-            } else if preserve_client_shell_location {
+            } else if preserve_client_shell_location && !local_tab_create_focus_succeeded {
                 false
             } else {
                 self.claim_shell_tab_geometry(client_id, false)

@@ -23,7 +23,7 @@ const LEAVES: [Leaf; 6] = [
     },
     Leaf {
         name: "create",
-        about: "Create a tab",
+        about: "Create a new Space with its initial tab",
         id: "cli:tab:create",
         arguments: TabCreateProjection::arguments,
         method: |matches| TabCreateProjection::from_matches(matches).map(Method::TabCreate),

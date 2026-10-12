@@ -199,17 +199,29 @@ herdr tab rename <tab_id> <label>
 herdr tab close <tab_id>
 ```
 
-Tabs remain addressable protocol objects inside a workspace. `tab list` and
-`tab get` remain available so automation can inspect tab identity, including
-restored legacy multi-tab sessions. `tab create`, `tab rename`, and `tab close`
-fail with `multi_tab_unsupported`, with the message `multi-tab mutations are not
-supported; use workspaces instead`. `tab focus` succeeds only for the already
-active tab and never switches tabs; a request to focus another tab returns that
-same error. Use workspaces, not tabs, for separate
-layouts. Workspace creation still creates its initial tab and root pane, and its
-JSON response exposes `.result.workspace.workspace_id`, `.result.tab.tab_id`,
-and `.result.root_pane.pane_id`. This release does not migrate the protocol or
-snapshots.
+Tabs remain runtime and protocol identities inside a workspace. The desktop UI
+has no tab bar; use Spaces for separate layouts. `tab list` and `tab get` can
+inspect tab identity, including records restored from legacy multi-tab sessions.
+
+`tab create` is a compatibility route for creating a separate workspace (a
+Space) with its initial tab and root pane; it does not add a tab to its source
+workspace. `--workspace` selects the source workspace and must name an existing
+workspace even when `--cwd` is supplied. If omitted, the active workspace is
+used; with no active workspace, the command returns `workspace_not_found`.
+An explicit `--cwd` overrides the new terminal's working directory. Otherwise,
+the source workspace's focused pane and the existing `terminal.new_cwd` policy
+determine it. `--env` uses the normal new-terminal environment rules, and
+`--label` names both the new workspace and its initial tab. By default the new
+Space does not take focus; `--focus` activates it, while `--no-focus` makes the
+default explicit.
+
+The response still returns `.result.tab` and `.result.root_pane`;
+`.result.tab.workspace_id` identifies the new Space. Callers must not assume
+that the returned tab belongs to the source workspace. `tab.focus` is a no-op
+only for the already-active tab; focusing another tab returns
+`multi_tab_unsupported`. `tab.rename`, `tab.move`, and `tab.close` also return
+that error. The protocol and snapshot format are not migrated, and this change
+does not add tab UI.
 
 ## Panes
 

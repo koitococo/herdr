@@ -15,7 +15,7 @@ Use Herdr as an automation layer for coding agents. A script can control them, o
 
 A pane exists whether or not it contains an agent. An agent is the recognized process currently running inside a pane. `agent start` therefore requires an existing shell pane and never creates, splits, or moves layout.
 
-Creating a workspace also creates its first tab and root pane; creating a tab creates its root pane. Use the returned pane ID for the first process, and split only when that layout needs another terminal.
+Creating a workspace also creates its first tab and root pane. The compatibility `tab create` command creates a separate workspace with its own initial tab and root pane; it does not add a tab to its source workspace. Use the returned pane ID for the first process, and split only when that layout needs another terminal.
 
 Creation commands print JSON. Capture IDs from the response instead of predicting them:
 
@@ -27,7 +27,7 @@ split=$(herdr pane split "$pane_id" --direction right --no-focus)
 review_pane=$(printf '%s\n' "$split" | jq -r '.result.pane.pane_id')
 ```
 
-`workspace create` returns `.result.workspace`, `.result.tab`, and `.result.root_pane`. `tab create` returns `.result.tab` and `.result.root_pane`. `pane split` returns the new pane as `.result.pane`.
+`workspace create` returns `.result.workspace`, `.result.tab`, and `.result.root_pane`. `tab create` returns `.result.tab` and `.result.root_pane`, and `.result.tab.workspace_id` identifies its new workspace. `pane split` returns the new pane as `.result.pane`.
 
 Moving a pane to another workspace changes its workspace-qualified pane ID. After any `pane move`, continue with `.result.move_result.pane.pane_id`; the response keeps the old value at `.result.move_result.previous_pane_id`. A running process keeps its launch-time Herdr environment, but the old `HERDR_PANE_ID` remains an alias for that terminal, so `--current` stays safe. New commands can still resolve the agent by name after the move, but a wait already in progress ends with `agent_not_running`.
 

@@ -195,11 +195,11 @@ herdr tab rename <tab_id> <label>
 herdr tab close <tab_id>
 ```
 
-标签页是工作区内的另一个终端布局。不指定 `--workspace` 时,`tab create` 使用活动工作区;如果没有活动工作区则失败。JSON 响应中的 `.result.tab.tab_id` 和 `.result.root_pane.pane_id` 是对应 ID。关闭工作区的最后一个标签页也会关闭该工作区。启用 `ui.confirm_close` 时，如果关闭父工作树的最后一个标签页会连带关闭整个工作树组，`tab close` 会返回 `confirmation_required` 错误。
+标签页仍是工作区内布局的运行时/API 身份。桌面 UI 没有标签栏，不同布局应使用 Spaces。`tab list` 和 `tab get` 仍可检查标签页身份，包括从旧版多标签快照恢复的记录。
 
-启用 `ui.confirm_close` 时，通过快捷键或标签页／窗格菜单关闭工作区的最后一个标签页或唯一窗格前，TUI 会要求确认。普通的窗格关闭及 CLI/API 关闭操作仍立即执行。
+为保持兼容，`tab create` 会创建一个带有初始标签页和根窗格的独立工作区（Space），而不是向来源工作区添加标签页。`--workspace` 指定来源工作区，而非新工作区；即使提供 `--cwd`，它也必须是有效的现有工作区。省略时使用活动工作区；没有活动工作区则返回 `workspace_not_found`。显式 `--cwd` 优先决定新终端的工作目录；否则由来源工作区的焦点窗格和现有 `terminal.new_cwd` 策略决定。`--env` 遵循普通新终端环境规则，`--label` 同时设置新工作区和初始标签页的名称。默认不会切换到新 Space；`--focus` 激活新 Space，`--no-focus` 显式保留默认行为。
 
-创建工作区、标签页和拆分窗格默认不改变焦点。`--focus` 选择新布局;`--no-focus` 显式表达默认行为。不指定 `--cwd` 时,新终端遵循 `terminal.new_cwd` 设置,默认跟随来源窗格或工作区。每个 `--env KEY=VALUE` 在新的根 shell 中添加或替换一个环境变量。
+响应仍返回 `.result.tab` 和 `.result.root_pane`；`.result.tab.workspace_id` 标识新 Space。调用方不能假定返回的标签页属于来源工作区。`tab.focus` 仅在目标已经是活动标签页时作为 no-op 成功；请求聚焦其他标签页会返回 `multi_tab_unsupported`。`tab.rename` 和 `tab.close` 也会返回同一错误。协议和快照格式未迁移，此更改也不会添加标签页 UI。
 
 ## 窗格
 

@@ -25,15 +25,15 @@ cli_params! {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct TabCreateParams => TabCreateProjection {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub workspace_id: Option<String> => Field::new(None).input(workspace_option("WORKSPACE_ID").order(0)),
+        pub workspace_id: Option<String> => Field::new(None).input(workspace_option("WORKSPACE_ID").help("Source Space for the new Space (defaults to the active Space)").order(0)),
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub cwd: Option<String> => Field::new(None).input(bindings::optional_text("cwd", "PATH").path().order(1)),
+        pub cwd: Option<String> => Field::new(None).input(bindings::optional_text("cwd", "PATH").help("Working directory for the new Space's initial terminal").path().order(1)),
         #[serde(default)]
         pub focus: bool => Field::new(false)
-            .input(bindings::boolean("focus", true).order(4))
-            .input(bindings::boolean("no-focus", false).order(5)),
+            .input(bindings::boolean("focus", true).help("Activate the new Space").order(4))
+            .input(bindings::boolean("no-focus", false).help("Keep the current Space active").order(5)),
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub label: Option<String> => Field::new(None).input(bindings::optional_text("label", "TEXT").order(2)),
+        pub label: Option<String> => Field::new(None).input(bindings::optional_text("label", "TEXT").help("Set the display name of the new Space and its initial tab").order(2)),
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         pub env: HashMap<String, String> => Field::new(HashMap::new()).input(bindings::environment().order(3)),
     }

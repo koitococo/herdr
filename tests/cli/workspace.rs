@@ -699,7 +699,7 @@ fn worktree_cli_rejects_local_argument_errors_before_socket_use() {
 }
 
 #[test]
-fn tab_read_commands_remain_available_and_mutations_are_rejected() {
+fn tab_reads_and_space_creation_work_while_unsupported_tab_mutations_are_rejected() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
@@ -708,39 +708,68 @@ fn tab_read_commands_remain_available_and_mutations_are_rejected() {
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
-    let created = run_cli(
+    let created = run_cli_json(
         &socket_path,
         &["workspace", "create", "--cwd", base.to_str().unwrap()],
     );
-    assert!(created.status.success());
-    let created_json: serde_json::Value = serde_json::from_slice(&created.stdout).unwrap();
-    let workspace_id = created_json["result"]["workspace"]["workspace_id"]
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
         .as_str()
         .unwrap()
         .to_string();
-    let tab_id = created_json["result"]["workspace"]["active_tab_id"]
+    let tab_id = created["result"]["workspace"]["active_tab_id"]
         .as_str()
         .unwrap()
         .to_string();
 
-    let listed_tabs = run_cli(&socket_path, &["tab", "list", "--workspace", &workspace_id]);
-    assert!(listed_tabs.status.success());
-    let listed_tabs_json: serde_json::Value = serde_json::from_slice(&listed_tabs.stdout).unwrap();
-    assert_eq!(
-        listed_tabs_json["result"]["tabs"].as_array().unwrap().len(),
-        1
-    );
+    let listed_tabs = run_cli_json(&socket_path, &["tab", "list", "--workspace", &workspace_id]);
+    let source_tabs_before = listed_tabs["result"]["tabs"].clone();
+    assert_eq!(source_tabs_before.as_array().unwrap().len(), 1);
 
-    let tab_get = run_cli(&socket_path, &["tab", "get", &tab_id]);
-    assert!(tab_get.status.success());
-    let tab_get_json: serde_json::Value = serde_json::from_slice(&tab_get.stdout).unwrap();
-    assert_eq!(tab_get_json["result"]["tab"]["tab_id"], tab_id);
+    let tab_get = run_cli_json(&socket_path, &["tab", "get", &tab_id]);
+    assert_eq!(tab_get["result"]["tab"]["tab_id"], tab_id);
 
     let focused_tab = run_cli(&socket_path, &["tab", "focus", &tab_id]);
     assert!(focused_tab.status.success());
 
+    let created_space = run_cli_json(
+        &socket_path,
+        &["tab", "create", "--workspace", &workspace_id],
+    );
+    assert_eq!(created_space["result"]["type"], "tab_created");
+    let new_workspace_id = created_space["result"]["tab"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let new_tab_id = created_space["result"]["tab"]["tab_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(new_workspace_id, workspace_id);
+    assert_ne!(new_tab_id, tab_id);
+    assert_eq!(new_tab_id, format!("{new_workspace_id}:t1"));
+    assert_eq!(
+        created_space["result"]["root_pane"]["workspace_id"],
+        new_workspace_id
+    );
+    assert_eq!(created_space["result"]["root_pane"]["tab_id"], new_tab_id);
+    assert_eq!(
+        created_space["result"]["root_pane"]["pane_id"],
+        format!("{new_workspace_id}:p1")
+    );
+
+    let source_tabs_after =
+        run_cli_json(&socket_path, &["tab", "list", "--workspace", &workspace_id]);
+    assert_eq!(source_tabs_after["result"]["tabs"], source_tabs_before);
+
+    let rejected_focus = run_cli(&socket_path, &["tab", "focus", &new_tab_id]);
+    assert!(!rejected_focus.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected_focus.stderr).contains("multi_tab_unsupported"),
+        "stderr: {}",
+        String::from_utf8_lossy(&rejected_focus.stderr)
+    );
+
     for args in [
-        vec!["tab", "create", "--workspace", workspace_id.as_str()],
         vec!["tab", "rename", tab_id.as_str(), "logs"],
         vec!["tab", "close", tab_id.as_str()],
     ] {

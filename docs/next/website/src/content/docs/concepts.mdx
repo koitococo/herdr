@@ -12,10 +12,16 @@ A workspace is the top-level project container. Use one workspace per repo, task
 ## Tab
 
 A tab remains a runtime and protocol identity for a layout inside a workspace.
-The desktop UI no longer has a tab bar, and this release does not offer
-multi-tab desktop management. `tab.list` and `tab.get` can inspect tab records,
-including those restored from legacy snapshots, while tab mutations are rejected
-with `multi_tab_unsupported`. The protocol and snapshot format are not migrated.
+The desktop UI has no tab bar; use Spaces for separate layouts. `tab.create`
+remains available for compatibility, but creates a separate workspace with its
+initial tab and root pane instead of adding a tab to the source workspace. Its
+`workspace_id` selects the source; callers must not assume the returned tab
+belongs to that workspace. `tab.list` and `tab.get` can inspect tab records,
+including those restored from legacy multi-tab snapshots. Other tab mutations
+remain restricted: `tab.focus` is a no-op only for the already-active tab, and
+other focus requests plus `tab.rename`, `tab.move`, and `tab.close` return
+`multi_tab_unsupported`. The protocol and snapshot format are not migrated, and
+`tab.create` does not restore tab UI.
 
 ## Pane
 

@@ -272,7 +272,6 @@ impl App {
         })
     }
 
-    #[cfg(test)]
     pub(super) fn tab_created_result(
         &self,
         ws_idx: usize,

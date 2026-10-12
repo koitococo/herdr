@@ -2386,6 +2386,10 @@ async fn public_background_tab_create_preserves_client_locations() {
     let workspace_id = server.app.public_workspace_id(0);
     let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
+    let first_root_pane = server.app.state.workspaces[0].tabs[0].root_pane;
+    let first_root_pane_id = server.app.public_pane_id(0, first_root_pane).unwrap();
+    let second_root_pane = server.app.state.workspaces[0].tabs[second_tab].root_pane;
+    let second_root_pane_id = server.app.public_pane_id(0, second_root_pane).unwrap();
 
     let (first_control, _) = connect_matching_test_shell(&mut server, 71);
     let (second_control, _) = connect_matching_test_shell(&mut server, 72);
@@ -2393,12 +2397,12 @@ async fn public_background_tab_create_preserves_client_locations() {
     let _ = second_control.recv().expect("second snapshot");
     assert!(server.focus_shell_client_on_tab(71, &second_tab_id));
 
-    let (respond_to, _response_rx) = std::sync::mpsc::channel();
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
     server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
         request: crate::api::schema::Request {
             id: "create-background-tab".into(),
             method: crate::api::schema::Method::TabCreate(crate::api::schema::TabCreateParams {
-                workspace_id: Some(workspace_id),
+                workspace_id: Some(workspace_id.clone()),
                 cwd: None,
                 focus: false,
                 label: Some("background".into()),
@@ -2409,6 +2413,27 @@ async fn public_background_tab_create_preserves_client_locations() {
         response_write_complete: None,
     });
 
+    let response: crate::api::schema::SuccessResponse =
+        serde_json::from_str(&response_rx.recv().expect("tab create response")).unwrap();
+    let crate::api::schema::ResponseResult::TabCreated { tab, root_pane } = response.result else {
+        panic!("expected tab_created response");
+    };
+    let new_workspace_id = server.app.public_workspace_id(1);
+    assert_ne!(new_workspace_id, workspace_id);
+    assert_ne!(tab.tab_id, first_tab_id);
+    assert_ne!(tab.tab_id, second_tab_id);
+    assert_ne!(root_pane.pane_id, first_root_pane_id);
+    assert_ne!(root_pane.pane_id, second_root_pane_id);
+    assert_eq!(tab.workspace_id, new_workspace_id);
+    assert_eq!(root_pane.workspace_id, new_workspace_id);
+    assert_eq!(root_pane.tab_id, tab.tab_id);
+    assert_eq!(tab.label, "background");
+    assert_eq!(server.app.state.workspaces.len(), 2);
+    assert_eq!(server.app.state.workspaces[0].tabs.len(), 2);
+    assert_eq!(server.app.state.workspaces[1].tabs.len(), 1);
+    assert_eq!(server.app.state.workspaces[1].display_name(), "background");
+    assert_eq!(server.app.state.active, Some(0));
+    assert_eq!(server.app.state.selected, 0);
     assert_eq!(
         server.shell_tab_id_for_client(71).as_deref(),
         Some(second_tab_id.as_str())
@@ -2418,6 +2443,208 @@ async fn public_background_tab_create_preserves_client_locations() {
         Some(first_tab_id.as_str())
     );
     shutdown_test_runtimes(&mut server);
+}
+#[tokio::test]
+async fn client_shell_tab_create_focus_is_local_and_uses_endpoint_source() {
+    fn create_from_client(
+        server: &mut HeadlessServer,
+        client_id: u64,
+        request_id: &str,
+        focus: bool,
+    ) -> String {
+        let (respond_to, response_rx) = std::sync::mpsc::channel();
+        server.handle_client_shell_api_request(
+            client_id,
+            crate::api::ApiRequestMessage {
+                request: crate::api::schema::Request {
+                    id: request_id.into(),
+                    method: crate::api::schema::Method::TabCreate(
+                        crate::api::schema::TabCreateParams {
+                            workspace_id: None,
+                            cwd: None,
+                            focus,
+                            label: None,
+                            env: std::collections::HashMap::new(),
+                        },
+                    ),
+                },
+                respond_to,
+                response_write_complete: None,
+            },
+        );
+        response_rx
+            .recv()
+            .expect("client-shell tab-create response")
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let base = std::env::temp_dir().join(format!(
+        "herdr-client-tab-create-{}-{timestamp}",
+        std::process::id()
+    ));
+    let active_cwd = base.join("active");
+    let source_cwd = base.join("source");
+    std::fs::create_dir_all(&active_cwd).unwrap();
+    std::fs::create_dir_all(&source_cwd).unwrap();
+
+    let mut server = test_headless_server();
+    let active = crate::workspace::Workspace::test_new("endpoint-active");
+    let source = crate::workspace::Workspace::test_new("endpoint-source");
+    server.app.state.workspaces = vec![active, source];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    #[cfg(windows)]
+    {
+        server.app.state.default_shell = "cmd.exe".into();
+    }
+    #[cfg(not(windows))]
+    {
+        server.app.state.default_shell = "/bin/sh".into();
+    }
+    server.app.state.shell_mode = crate::config::ShellModeConfig::NonLogin;
+    let active_pane = server.app.state.workspaces[0].tabs[0].root_pane;
+    let source_pane = server.app.state.workspaces[1].tabs[0].root_pane;
+    let active_terminal = server.app.state.workspaces[0]
+        .terminal_id(active_pane)
+        .unwrap()
+        .clone();
+    let source_terminal = server.app.state.workspaces[1]
+        .terminal_id(source_pane)
+        .unwrap()
+        .clone();
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&active_terminal)
+        .unwrap()
+        .cwd = active_cwd;
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&source_terminal)
+        .unwrap()
+        .cwd = source_cwd.clone();
+    let active_tab_id = server.app.public_tab_id(0, 0).unwrap();
+    let source_tab_id = server.app.public_tab_id(1, 0).unwrap();
+
+    let (first_control, _) = connect_matching_test_shell(&mut server, 81);
+    let (second_control, _) = connect_matching_test_shell(&mut server, 82);
+    let _ = first_control.recv().expect("first endpoint snapshot");
+    let _ = second_control.recv().expect("second endpoint snapshot");
+    assert!(server.focus_shell_client_on_tab(81, &source_tab_id));
+    assert_eq!(
+        server.shell_tab_id_for_client(81).as_deref(),
+        Some(source_tab_id.as_str())
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(82).as_deref(),
+        Some(active_tab_id.as_str())
+    );
+
+    let background_response = create_from_client(&mut server, 81, "background-tab-create", false);
+    let background: crate::api::schema::SuccessResponse =
+        serde_json::from_str(&background_response).unwrap();
+    let crate::api::schema::ResponseResult::TabCreated {
+        tab: background_tab,
+        ..
+    } = background.result
+    else {
+        panic!("expected background tab_created response");
+    };
+    assert!(!background_tab.focused);
+    assert_eq!(server.app.state.workspaces.len(), 3);
+    assert_eq!(
+        server.app.public_workspace_id(2),
+        background_tab.workspace_id
+    );
+    assert_eq!(server.app.state.workspaces[2].identity_cwd, source_cwd);
+    assert_eq!(server.app.state.active, Some(0));
+    assert_eq!(server.app.state.selected, 0);
+    assert_eq!(
+        server.shell_tab_id_for_client(81).as_deref(),
+        Some(source_tab_id.as_str())
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(82).as_deref(),
+        Some(active_tab_id.as_str())
+    );
+
+    let shell_before_failed_create = server.app.state.default_shell.clone();
+    server.app.state.default_shell = base.join("missing-shell").display().to_string();
+    let session_dirty_before_failed_create = server.app.state.session_dirty;
+    let failed_response = create_from_client(&mut server, 81, "failed-tab-create", true);
+    let failed: crate::api::schema::ErrorResponse = serde_json::from_str(&failed_response).unwrap();
+    assert_eq!(failed.error.code, "tab_create_failed");
+    assert_eq!(server.app.state.workspaces.len(), 3);
+    assert_eq!(server.app.state.active, Some(0));
+    assert_eq!(server.app.state.selected, 0);
+    assert_eq!(
+        server.app.state.session_dirty,
+        session_dirty_before_failed_create
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(81).as_deref(),
+        Some(source_tab_id.as_str())
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(82).as_deref(),
+        Some(active_tab_id.as_str())
+    );
+    server.app.state.default_shell = shell_before_failed_create;
+
+    let workspace_count_before_focused_create = server.app.state.workspaces.len();
+    let focused_response = create_from_client(&mut server, 81, "focused-tab-create", true);
+    let focused: crate::api::schema::SuccessResponse =
+        serde_json::from_str(&focused_response).unwrap();
+    let crate::api::schema::ResponseResult::TabCreated { tab, root_pane } = focused.result else {
+        panic!("expected focused tab_created response");
+    };
+    assert_eq!(
+        server.app.state.workspaces.len(),
+        workspace_count_before_focused_create + 1
+    );
+    assert_ne!(tab.workspace_id, background_tab.workspace_id);
+    assert_ne!(tab.tab_id, background_tab.tab_id);
+    assert_eq!(root_pane.workspace_id, tab.workspace_id);
+    assert_eq!(root_pane.tab_id, tab.tab_id);
+    let focused_workspace_index = server
+        .app
+        .parse_workspace_id(&tab.workspace_id)
+        .filter(|index| server.app.state.workspaces.get(*index).is_some())
+        .expect("TabCreated must refer to its newly created workspace");
+    assert_eq!(
+        server.app.public_workspace_id(focused_workspace_index),
+        tab.workspace_id
+    );
+    assert_eq!(
+        server.app.state.workspaces[focused_workspace_index].identity_cwd,
+        source_cwd
+    );
+    assert!(tab.focused);
+    assert!(root_pane.focused);
+    assert_eq!(server.app.state.active, Some(focused_workspace_index));
+    assert_eq!(server.app.state.selected, focused_workspace_index);
+    assert_eq!(server.app.state.workspaces[0].tabs.len(), 1);
+    assert_eq!(server.app.state.workspaces[1].tabs.len(), 1);
+    assert_eq!(
+        server.shell_tab_id_for_client(81).as_deref(),
+        Some(tab.tab_id.as_str())
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(82).as_deref(),
+        Some(active_tab_id.as_str())
+    );
+    assert_eq!(server.tab_geometry_controllers.get(&tab.tab_id), Some(&81));
+
+    shutdown_test_runtimes(&mut server);
+    let _ = std::fs::remove_dir_all(base);
 }
 
 #[tokio::test]

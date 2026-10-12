@@ -1,7 +1,7 @@
 use super::harness::*;
 
 #[test]
-fn pane_close_removes_only_target_pane_and_tab_creation_is_rejected() {
+fn pane_close_removes_only_target_pane_and_tab_create_creates_a_new_workspace() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
@@ -20,29 +20,56 @@ fn pane_close_removes_only_target_pane_and_tab_creation_is_rejected() {
         .as_str()
         .unwrap()
         .to_string();
-
+    let source_tab_id = created_json["result"]["workspace"]["active_tab_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let root_pane_id = created_json["result"]["root_pane"]["pane_id"]
         .as_str()
         .unwrap()
         .to_string();
-    let rejected_tab = run_cli(
+
+    let created_tab = run_cli(
         &socket_path,
         &["tab", "create", "--workspace", &workspace_id],
     );
-    assert_eq!(rejected_tab.status.code(), Some(1));
-    let rejected_tab_error: serde_json::Value =
-        serde_json::from_slice(&rejected_tab.stderr).unwrap();
-    assert_eq!(rejected_tab_error["error"]["code"], "multi_tab_unsupported");
-
-    let tabs_before_split =
-        run_cli_json(&socket_path, &["tab", "list", "--workspace", &workspace_id]);
+    assert!(created_tab.status.success());
+    let created_tab_json: serde_json::Value = serde_json::from_slice(&created_tab.stdout).unwrap();
+    assert_eq!(created_tab_json["result"]["type"], "tab_created");
+    let new_workspace_id = created_tab_json["result"]["tab"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let new_tab_id = created_tab_json["result"]["tab"]["tab_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let new_root_pane_id = created_tab_json["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(new_workspace_id, workspace_id);
     assert_eq!(
-        tabs_before_split["result"]["tabs"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
+        created_tab_json["result"]["root_pane"]["workspace_id"],
+        new_workspace_id
     );
+    assert_eq!(
+        created_tab_json["result"]["root_pane"]["tab_id"],
+        new_tab_id
+    );
+
+    let source_tabs = run_cli_json(&socket_path, &["tab", "list", "--workspace", &workspace_id]);
+    let source_tabs = source_tabs["result"]["tabs"].as_array().unwrap();
+    assert_eq!(source_tabs.len(), 1);
+    assert_eq!(source_tabs[0]["tab_id"], source_tab_id);
+
+    let new_workspace_tabs = run_cli_json(
+        &socket_path,
+        &["tab", "list", "--workspace", &new_workspace_id],
+    );
+    let new_workspace_tabs = new_workspace_tabs["result"]["tabs"].as_array().unwrap();
+    assert_eq!(new_workspace_tabs.len(), 1);
+    assert_eq!(new_workspace_tabs[0]["tab_id"], new_tab_id);
 
     let split = run_cli_json(
         &socket_path,
@@ -58,25 +85,31 @@ fn pane_close_removes_only_target_pane_and_tab_creation_is_rejected() {
     let closed_json: serde_json::Value = serde_json::from_slice(&closed.stdout).unwrap();
     assert_eq!(closed_json["result"]["type"], "ok");
 
-    let workspaces = run_cli(&socket_path, &["workspace", "list"]);
-    assert!(workspaces.status.success());
-    let workspaces_json: serde_json::Value = serde_json::from_slice(&workspaces.stdout).unwrap();
-    assert_eq!(
-        workspaces_json["result"]["workspaces"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(
-        workspaces_json["result"]["workspaces"][0]["workspace_id"],
-        workspace_id
-    );
+    let workspaces = run_cli_json(&socket_path, &["workspace", "list"]);
+    let workspaces = workspaces["result"]["workspaces"].as_array().unwrap();
+    assert_eq!(workspaces.len(), 2);
+    assert!(workspaces
+        .iter()
+        .any(|workspace| workspace["workspace_id"] == workspace_id));
+    assert!(workspaces
+        .iter()
+        .any(|workspace| workspace["workspace_id"] == new_workspace_id));
 
-    let tabs = run_cli(&socket_path, &["tab", "list", "--workspace", &workspace_id]);
-    assert!(tabs.status.success());
-    let tabs_json: serde_json::Value = serde_json::from_slice(&tabs.stdout).unwrap();
-    assert_eq!(tabs_json["result"]["tabs"].as_array().unwrap().len(), 1);
+    let source_panes = run_cli_json(
+        &socket_path,
+        &["pane", "list", "--workspace", &workspace_id],
+    );
+    let source_panes = source_panes["result"]["panes"].as_array().unwrap();
+    assert_eq!(source_panes.len(), 1);
+    assert_eq!(source_panes[0]["pane_id"], root_pane_id);
+
+    let new_workspace_panes = run_cli_json(
+        &socket_path,
+        &["pane", "list", "--workspace", &new_workspace_id],
+    );
+    let new_workspace_panes = new_workspace_panes["result"]["panes"].as_array().unwrap();
+    assert_eq!(new_workspace_panes.len(), 1);
+    assert_eq!(new_workspace_panes[0]["pane_id"], new_root_pane_id);
 
     cleanup_spawned_herdr(herdr, base);
 }
