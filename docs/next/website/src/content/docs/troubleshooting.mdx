@@ -65,8 +65,10 @@ Updating the binary does not replace a compatible server that is already running
 
 ```bash
 herdr server stop
-herdr
+herdr server
 ```
+
+Keep the server running, then attach with `herdr` in another terminal. Ordinary `herdr` startup does not create a server.
 
 Stopping a server exits its pane processes. Named sessions use `herdr session stop <name>`. See [Install Herdr](/docs/install/#update) for updater, package-manager, and live-handoff behavior.
 
@@ -82,8 +84,10 @@ launchctl managername
 
 ```bash
 herdr server stop
-herdr
+herdr server
 ```
+
+Keep this server running in the GUI terminal, then attach with `herdr` in another terminal.
 
 Stopping the server exits its pane processes. Herdr panes inherit the long-lived server's macOS launch context, so a server started through SSH or a background job may not have access to interactive Keychain services. See [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966) for details.
 

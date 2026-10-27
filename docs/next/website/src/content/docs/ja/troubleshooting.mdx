@@ -65,8 +65,10 @@ map alt+right send_text all \x1bf
 
 ```bash
 herdr server stop
-herdr
+herdr server
 ```
+
+サーバーを動作させたまま、別のターミナルで `herdr` を実行して接続します。通常の `herdr` 起動ではサーバーを作成しません。
 
 サーバーを停止するとペインのプロセスも終了します。名前付きセッションでは `herdr session stop <name>` を使います。更新機能、パッケージマネージャー、ライブハンドオフについては[インストール](/ja/docs/install/#update)を参照してください。
 
@@ -82,8 +84,10 @@ launchctl managername
 
 ```bash
 herdr server stop
-herdr
+herdr server
 ```
+
+このサーバーを GUI ターミナルで動作させたまま、別のターミナルで `herdr` を実行して接続してください。
 
 サーバーを停止するとペインのプロセスも終了します。Herdr のペインは長時間動作するサーバーの macOS 起動コンテキストを継承するため、SSH やバックグラウンドジョブから起動されたサーバーは対話型 Keychain サービスにアクセスできないことがあります。詳細は [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966) を参照してください。
 

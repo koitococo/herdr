@@ -12,8 +12,8 @@ API を呼び出すコマンドでは、引数の解析、`--help`、シェル�
 ## 起動とステータス
 
 ```bash
-herdr                         # デフォルトセッションを起動またはアタッチ
-herdr --no-create             # 実行中のサーバーにのみ接続。自動作成・デーモン化せず、利用可能なサーバーがなければ失敗
+herdr                         # 既存のデフォルトセッションに接続。利用可能なサーバーがなければエラー
+herdr --no-create             # 既定の動作を明示：サーバーを作成・デーモン化しない
 herdr --remote workbox        # SSH 越しにアタッチ (ローカルのキーバインドを使用)
 herdr --default-config        # デフォルト設定を表示
 herdr update                  # 設定済みチャンネルからダウンロードしてインストール
@@ -23,6 +23,8 @@ herdr channel set preview     # プレビュービルドにオプトイン
 herdr channel set stable      # 直接インストールを安定版に戻す
 herdr --version               # バージョンを表示
 ```
+
+通常の `herdr` 起動では既存のサーバーにのみ接続します。`--no-create` は引き続き利用でき、デフォルトで有効です。省略してもサーバーの自動作成は有効になりません。サーバーが動作していない場合は、別のターミナルまたはプロセス管理ツールで `herdr server` を明示的に起動してから、`herdr` で接続してください。名前付きセッションでは、それぞれ `herdr --session <name> server` と `herdr --session <name>` を使います。
 
 起動と更新の任意オプション:
 

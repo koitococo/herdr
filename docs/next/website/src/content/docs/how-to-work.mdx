@@ -15,7 +15,7 @@ Start Herdr from the project directory:
 herdr
 ```
 
-Herdr starts or attaches to your local background session automatically. You do not manage sockets. Run shells, servers, tests, and agents normally inside panes.
+Herdr connects to your existing local background session; it reports an error if no server is running. Start the server explicitly with `herdr server` from the project directory in another terminal or under a supervisor, then run `herdr` to attach. `--no-create` remains supported and is enabled by default. You do not manage sockets. Run shells, servers, tests, and agents normally inside panes.
 
 Detach the client with `ctrl+b q`. Your panes keep running.
 

@@ -12,8 +12,8 @@ Herdr 的 CLI 通过与集成和智能体相同的本地 socket API 与运行中
 ## 启动与状态
 
 ```bash
-herdr                         # 启动或连接默认会话
-herdr --no-create             # 只连接已运行的服务器；不会自动创建或以守护进程方式启动；无可用服务器时失败
+herdr                         # 连接已有默认会话；无可用服务器时报错
+herdr --no-create             # 显式指定默认行为：不创建服务器或以守护进程方式启动
 herdr --remote workbox        # 通过 SSH 连接,使用本地按键绑定
 herdr --default-config        # 打印默认配置
 herdr update                  # 从配置的通道下载并安装
@@ -23,6 +23,8 @@ herdr channel set preview     # 启用预览构建
 herdr channel set stable      # 把直接安装切回稳定版
 herdr --version               # 打印版本
 ```
+
+普通 `herdr` 启动只连接已有服务器。`--no-create` 参数保留且默认启用；省略该参数不会启用自动创建服务器。没有运行中的服务器时，请先在另一终端或进程管理器下显式运行 `herdr server`，再运行 `herdr` 连接。命名会话分别使用 `herdr --session <name> server` 和 `herdr --session <name>`。
 
 可选的启动和更新设置：
 

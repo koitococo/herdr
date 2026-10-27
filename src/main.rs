@@ -498,10 +498,9 @@ where
         .collect()
 }
 
-fn consume_no_create_arg(args: &mut Vec<String>) -> bool {
+fn consume_no_create_arg(args: &mut Vec<String>) {
     let mut is_program_name = true;
     let mut before_separator = true;
-    let mut no_create = false;
     args.retain(|arg| {
         if is_program_name {
             is_program_name = false;
@@ -512,12 +511,10 @@ fn consume_no_create_arg(args: &mut Vec<String>) -> bool {
             return true;
         }
         if before_separator && arg == "--no-create" {
-            no_create = true;
             return false;
         }
         true
     });
-    no_create
 }
 
 fn write_root_options(output: &mut impl io::Write) -> io::Result<()> {
@@ -541,7 +538,7 @@ fn write_root_options(output: &mut impl io::Write) -> io::Result<()> {
     )?;
     writeln!(
         output,
-        "  --no-create         Attach only to an existing server; do not start one"
+        "  --no-create         Attach only to an existing server; do not start one (default)"
     )?;
     writeln!(
         output,
@@ -590,7 +587,8 @@ fn main() -> io::Result<()> {
     if let Some(result) = platform::maybe_activate_desktop_notification(&raw_args) {
         return result;
     }
-    let no_create = consume_no_create_arg(&mut raw_args);
+    consume_no_create_arg(&mut raw_args);
+    let no_create = true;
     if let Some(outcome) = cli::maybe_run_machine(&raw_args) {
         return finish_cli(outcome);
     }
@@ -703,7 +701,7 @@ fn main() -> io::Result<()> {
         println!();
         println!("Common commands:");
         for (command, description) in [
-            ("herdr", "Launch or attach to the persistent session"),
+            ("herdr", "Attach to the persistent session"),
             (
                 "herdr status [server|client]",
                 "Show local client and running server status",
@@ -920,25 +918,16 @@ mod tests {
         let mut args = ["herdr", "--no-create", "server", "--", "--no-create"]
             .map(str::to_string)
             .to_vec();
-        assert!(consume_no_create_arg(&mut args));
+        consume_no_create_arg(&mut args);
         assert_eq!(args, ["herdr", "server", "--", "--no-create"]);
 
         let mut trailing = ["herdr", "--", "--no-create"].map(str::to_string).to_vec();
-        assert!(!consume_no_create_arg(&mut trailing));
+        consume_no_create_arg(&mut trailing);
         assert_eq!(trailing, ["herdr", "--", "--no-create"]);
 
         let mut with_value = ["herdr", "--no-create=true"].map(str::to_string).to_vec();
-        assert!(!consume_no_create_arg(&mut with_value));
+        consume_no_create_arg(&mut with_value);
         assert_eq!(with_value, ["herdr", "--no-create=true"]);
-    }
-
-    #[test]
-    fn root_help_documents_no_create_startup_behavior() {
-        let mut output = Vec::new();
-        write_root_options(&mut output).unwrap();
-        let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("--no-create"));
-        assert!(output.contains("Attach only to an existing server; do not start one"));
     }
 
     #[cfg(unix)]

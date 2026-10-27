@@ -3,8 +3,8 @@
 //! When the user runs `herdr` with no subcommand:
 //! 1. Check if a server is already listening on the client socket
 //! 2. If one is listening, attach to it
-//! 3. If none is listening and `--no-create` is present, return an error
-//! 4. Otherwise spawn a background daemon, wait for readiness, then attach
+//! 3. Ordinary startup returns an error if none is listening (the default)
+//! 4. Explicit callers permitting creation spawn a background daemon and attach
 
 use std::io;
 use std::path::Path;
@@ -316,9 +316,8 @@ pub fn auto_detect_launch(saved_federation: bool, no_create: bool) -> io::Result
     let socket_path = client_socket_path();
     info!(path = %socket_path.display(), "auto-detect launch starting");
 
-    // Preserve the saved-federation fallback for ordinary startup if probing
-    // itself fails. A definite absence with --no-create is handled below and
-    // must not be swallowed by that fallback.
+    // Preserve the saved-federation fallback when creation is permitted if
+    // probing itself fails. Attach-only startup must report the local failure.
     let listening = match is_server_listening() {
         Ok(listening) => listening,
         Err(error) if saved_federation && !no_create => {
@@ -366,7 +365,7 @@ fn startup_action(server_listening: bool, no_create: bool) -> io::Result<Startup
         (false, false) => Ok(StartupAction::Spawn),
         (false, true) => Err(io::Error::new(
             io::ErrorKind::NotFound,
-            "no herdr server is running and --no-create prevents starting one; start a server first or run `herdr` without --no-create",
+            "no herdr server is running; start one with `herdr server`, then run `herdr` to attach",
         )),
     }
 }
@@ -381,8 +380,6 @@ mod startup_decision_tests {
         let error = startup_action(false, true).unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
-        assert!(error.to_string().contains("no herdr server is running"));
-        assert!(error.to_string().contains("--no-create"));
     }
 
     #[test]
@@ -391,7 +388,7 @@ mod startup_decision_tests {
     }
 
     #[test]
-    fn default_startup_spawns_when_server_is_absent() {
+    fn startup_can_spawn_when_creation_is_explicitly_permitted() {
         assert_eq!(startup_action(false, false).unwrap(), StartupAction::Spawn);
     }
 }

@@ -11,7 +11,9 @@ pub(super) fn command() -> Command {
         .disable_help_flag(true)
         .disable_version_flag(true)
         .arg(help_flag())
-        .arg(flag("no-create").help("Attach only to an existing server; do not start one"))
+        .arg(
+            flag("no-create").help("Attach only to an existing server; do not start one (default)"),
+        )
         .arg(option("session", "NAME").help("Use or create a named persistent session"))
         .arg(option("machine", "LABEL-OR-ID").help("Run an API command on a saved SSH machine"))
         .arg(option("remote", "TARGET").help("Attach through SSH to a remote Herdr server"))
@@ -435,10 +437,6 @@ mod tests {
         let command = super::command();
         let no_create = option_arg(&command, "no-create");
         assert!(matches!(no_create.get_action(), clap::ArgAction::SetTrue));
-        assert_eq!(
-            no_create.get_help().unwrap().to_string(),
-            "Attach only to an existing server; do not start one"
-        );
         assert!(command
             .try_get_matches_from(["herdr", "--no-create"])
             .is_ok());

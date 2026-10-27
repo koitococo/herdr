@@ -12,8 +12,8 @@ API-backed commands use the same argument definitions for parsing, `--help`, and
 ## Launch and status
 
 ```bash
-herdr                         # launch or attach to the default session
-herdr --no-create             # connect only to an existing server; never create/daemonize one; fail if none is available
+herdr                         # attach to the existing default session; fail if no server is available
+herdr --no-create             # explicitly request the default: never create/daemonize a server
 herdr --remote workbox        # attach through SSH, using local keybindings
 herdr --default-config        # print default config
 herdr update                  # download and install from the configured channel
@@ -23,6 +23,8 @@ herdr channel set preview     # opt into preview builds
 herdr channel set stable      # return a direct install to stable
 herdr --version               # print version
 ```
+
+Ordinary `herdr` startup only connects to an existing server. `--no-create` remains supported and is enabled by default; omitting it does not enable automatic server creation. If no server is running, start one explicitly with `herdr server` in another terminal or under a supervisor, then run `herdr` to attach. For a named session, use `herdr --session <name> server` and `herdr --session <name>`.
 
 Optional launch and update settings:
 

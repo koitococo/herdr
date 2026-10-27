@@ -65,8 +65,10 @@ map alt+right send_text all \x1bf
 
 ```bash
 herdr server stop
-herdr
+herdr server
 ```
+
+保持服务器运行，再在另一终端运行 `herdr` 连接。普通 `herdr` 启动不会创建服务器。
 
 停止服务器会结束窗格进程。命名会话使用 `herdr session stop <name>`。更新器、软件包管理器和实时移交行为见[安装 Herdr](/zh-cn/docs/install/#update)。
 
@@ -82,8 +84,10 @@ launchctl managername
 
 ```bash
 herdr server stop
-herdr
+herdr server
 ```
+
+保持该服务器在 GUI 终端中运行，再在另一终端运行 `herdr` 连接。
 
 停止服务器会结束窗格进程。Herdr 窗格会继承长期运行服务器的 macOS 启动上下文，因此通过 SSH 或后台任务启动的服务器可能无法访问交互式钥匙串服务。详情见 [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966)。
 
